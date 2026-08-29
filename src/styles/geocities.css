@@ -1,0 +1,295 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   GEOCITIES MODE  🌐  "Welcome to my homepage!!!"
+   A cosmetic 90s reskin. Everything here is scoped under `html.geocities`
+   so it is completely inert unless VITE_GEOCITIES is turned on.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ─── 1. Hijack the design-system tokens ─────────────────────────────────────
+   shadcn/ui reads every colour from these CSS variables, so overriding them
+   here recolours the entire app (buttons, cards, inputs, sidebar, dialogs…). */
+html.geocities {
+  color-scheme: light;
+
+  --background: 240 60% 10%;      /* deep navy "space" */
+  --foreground: 60 100% 90%;      /* pale yellow text */
+
+  --card: 220 40% 22%;
+  --card-foreground: 0 0% 100%;
+  --card-elevated: 220 40% 28%;
+
+  --popover: 220 45% 18%;
+  --popover-foreground: 0 0% 100%;
+
+  --primary: 300 100% 45%;        /* HOT magenta */
+  --primary-foreground: 60 100% 95%;
+
+  --secondary: 180 100% 30%;      /* teal */
+  --secondary-foreground: 0 0% 100%;
+
+  --accent: 120 100% 40%;         /* lime green */
+  --accent-foreground: 0 0% 0%;
+
+  --muted: 220 30% 30%;
+  --muted-foreground: 60 40% 80%;
+
+  --destructive: 0 100% 45%;
+  --destructive-foreground: 0 0% 100%;
+
+  --success: 120 100% 35%;
+  --success-foreground: 0 0% 0%;
+
+  --warning: 45 100% 50%;
+  --warning-foreground: 0 0% 0%;
+
+  --info: 210 100% 50%;
+  --info-foreground: 0 0% 100%;
+
+  --border: 300 100% 60%;
+  --border-subtle: 180 100% 40%;
+  --input: 0 0% 100%;
+  --ring: 60 100% 50%;
+
+  /* No rounded corners in 1998. */
+  --radius: 0px;
+
+  --sidebar-background: 270 60% 15%;
+  --sidebar-foreground: 60 100% 88%;
+  --sidebar-primary: 300 100% 45%;
+  --sidebar-primary-foreground: 0 0% 100%;
+  --sidebar-accent: 180 100% 25%;
+  --sidebar-accent-foreground: 0 0% 100%;
+  --sidebar-border: 300 100% 55%;
+  --sidebar-ring: 60 100% 50%;
+  --sidebar-muted: 60 30% 70%;
+  --sidebar: 270 60% 15%;
+
+  --chart-1: 300 100% 50%;
+  --chart-2: 120 100% 40%;
+  --chart-3: 60 100% 50%;
+  --chart-4: 210 100% 50%;
+  --chart-5: 20 100% 50%;
+
+  /* Kill the cinematic shadows / glows. */
+  --shadow-2xs: none;
+  --shadow-xs: none;
+  --shadow-sm: 2px 2px 0 #000;
+  --shadow: 3px 3px 0 #000;
+  --shadow-md: 3px 3px 0 #000;
+  --shadow-lg: 4px 4px 0 #000;
+  --shadow-xl: 5px 5px 0 #000;
+  --shadow-2xl: 6px 6px 0 #000;
+  --glow-emerald: none;
+  --glow-amber: none;
+  --glow-sapphire: none;
+  --glow-amethyst: none;
+}
+
+/* ─── 2. Comic Sans. Obviously. ─────────────────────────────────────────────
+   Icon fonts / SVGs are unaffected; this only swaps text faces. */
+html.geocities,
+html.geocities body,
+html.geocities button,
+html.geocities input,
+html.geocities textarea,
+html.geocities select,
+html.geocities * {
+  font-family: "Comic Sans MS", "Comic Sans", "Chalkboard SE", "Marker Felt",
+    cursive, sans-serif !important;
+  letter-spacing: normal !important;
+  border-radius: 0 !important;
+}
+
+/* ─── 3. The star-field wallpaper ──────────────────────────────────────────── */
+html.geocities body {
+  background-color: #05010f !important;
+  background-image:
+    radial-gradient(1px 1px at 20px 30px, #fff, transparent),
+    radial-gradient(1px 1px at 90px 70px, #9df, transparent),
+    radial-gradient(2px 2px at 160px 120px, #fff, transparent),
+    radial-gradient(1px 1px at 230px 50px, #ff9, transparent),
+    radial-gradient(1px 1px at 280px 160px, #fff, transparent),
+    radial-gradient(2px 2px at 50px 190px, #f9f, transparent);
+  background-size: 300px 220px;
+  background-repeat: repeat;
+  image-rendering: pixelated;
+}
+
+/* Nuke the glassmorphism / ambient blobs the app layers in. */
+html.geocities [class*="backdrop-blur"],
+html.geocities .glass,
+html.geocities .glass-subtle,
+html.geocities .glass-strong {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  background-color: hsl(var(--card)) !important;
+}
+html.geocities [class*="blur-["] {
+  filter: none !important;
+  opacity: 0 !important;
+}
+
+/* ─── 4. Chunky beveled everything ─────────────────────────────────────────── */
+html.geocities .bg-card,
+html.geocities [class*="rounded"],
+html.geocities [class*="border"] {
+  border-color: #00e5e5 !important;
+}
+
+html.geocities button:not([role="menuitemradio"]):not([data-state]),
+html.geocities [type="button"],
+html.geocities [type="submit"],
+html.geocities a[class*="bg-primary"] {
+  border: 3px outset #c0c0c0 !important;
+  background: linear-gradient(#e8e8e8, #a8a8a8) !important;
+  color: #000 !important;
+  text-shadow: none !important;
+  box-shadow: none !important;
+  font-weight: bold !important;
+}
+html.geocities button:active {
+  border-style: inset !important;
+}
+
+/* Inputs: white boxes with inset borders. */
+html.geocities input,
+html.geocities textarea,
+html.geocities select {
+  background: #fff !important;
+  color: #000 !important;
+  border: 2px inset #808080 !important;
+}
+html.geocities input::placeholder {
+  color: #666 !important;
+}
+
+/* Cards get a loud double border and a hard drop shadow. */
+html.geocities .bg-card,
+html.geocities [class*="bg-card"] {
+  border: 3px ridge #ff00ff !important;
+  box-shadow: 4px 4px 0 #000 !important;
+}
+
+/* ─── 5. Links like it's Netscape ─────────────────────────────────────────── */
+html.geocities a {
+  color: #00ffff !important;
+  text-decoration: underline !important;
+}
+html.geocities a:visited {
+  color: #ff66ff !important;
+}
+html.geocities a:hover {
+  color: #ffff00 !important;
+  background: #000080 !important;
+}
+
+/* ─── 6. RAINBOW ANIMATED HEADINGS ─────────────────────────────────────────── */
+html.geocities h1,
+html.geocities h2,
+html.geocities .section-title {
+  font-weight: bold !important;
+  background-image: linear-gradient(
+    90deg,
+    #ff0000, #ff8800, #ffee00, #00cc00, #0088ff, #8800ff, #ff0000
+  ) !important;
+  background-size: 200% auto !important;
+  -webkit-background-clip: text !important;
+  background-clip: text !important;
+  -webkit-text-fill-color: transparent !important;
+  color: transparent !important;
+  animation: geo-rainbow 6s linear infinite !important;
+  text-shadow: none !important;
+}
+html.geocities h1 { text-transform: uppercase !important; }
+html.geocities .section-title::after { display: none !important; }
+
+@keyframes geo-rainbow {
+  to { background-position: 200% center; }
+}
+
+/* ─── 7. <blink> lives again ───────────────────────────────────────────────── */
+html.geocities .geo-blink {
+  animation: geo-blink 1s step-start infinite;
+}
+@keyframes geo-blink {
+  50% { opacity: 0; }
+}
+
+/* ─── 8. Marquee ──────────────────────────────────────────────────────────── */
+html.geocities .geo-marquee {
+  overflow: hidden;
+  white-space: nowrap;
+  box-sizing: border-box;
+  border: 3px ridge #ffff00;
+  background: #000080;
+  color: #ffff00;
+  font-weight: bold;
+  padding: 4px 0;
+}
+html.geocities .geo-marquee > span {
+  display: inline-block;
+  padding-left: 100%;
+  animation: geo-scroll 18s linear infinite;
+}
+@keyframes geo-scroll {
+  to { transform: translateX(-100%); }
+}
+
+/* ─── 9. Chrome bits (banner / counter / footer) ──────────────────────────── */
+html.geocities .geo-panel {
+  border: 4px ridge #00ffff;
+  background: #1a0033;
+  padding: 12px 16px;
+  margin-bottom: 20px;
+  text-align: center;
+}
+html.geocities .geo-construction {
+  display: inline-block;
+  background: #ffcc00 repeating-linear-gradient(
+    45deg, #ffcc00 0 12px, #000 12px 24px
+  );
+  color: #000;
+  font-weight: bold;
+  padding: 4px 10px;
+  border: 2px solid #000;
+  transform: rotate(-2deg);
+}
+html.geocities .geo-construction span {
+  background: #ffcc00;
+  padding: 0 6px;
+}
+html.geocities .geo-counter {
+  display: inline-block;
+  background: #000;
+  color: #00ff00;
+  font-family: "Courier New", monospace !important;
+  font-weight: bold;
+  letter-spacing: 3px !important;
+  padding: 3px 8px;
+  border: 2px solid #00ff00;
+}
+html.geocities .geo-footer {
+  margin-top: 32px;
+  padding: 16px;
+  border-top: 3px double #ff00ff;
+  text-align: center;
+  font-size: 12px;
+  color: #ffff99;
+}
+html.geocities .geo-footer a { margin: 0 6px; }
+
+/* Respect users who don't want the disco. */
+@media (prefers-reduced-motion: reduce) {
+  html.geocities h1,
+  html.geocities h2,
+  html.geocities .section-title,
+  html.geocities .geo-blink,
+  html.geocities .geo-marquee > span {
+    animation: none !important;
+  }
+  html.geocities h1,
+  html.geocities h2,
+  html.geocities .section-title {
+    -webkit-text-fill-color: #ff66ff !important;
+    color: #ff66ff !important;
+  }
+}

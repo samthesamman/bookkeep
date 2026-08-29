@@ -3,6 +3,8 @@ import { useState } from 'react';
 import { Sidebar } from './Sidebar';
 import { Header } from './Header';
 import { Sheet, SheetContent } from '@/components/ui/sheet';
+import { GEOCITIES_MODE } from '@/lib/geocities';
+import { GeocitiesBanner, GeocitiesFooter } from '@/components/geocities/GeocitiesChrome';
 
 export function AppLayout() {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
@@ -35,7 +37,9 @@ export function AppLayout() {
       {/* Main content */}
       <main className="relative pt-24 sm:pt-16 md:ml-64">
         <div className="p-4 sm:p-6 lg:p-8">
+          {GEOCITIES_MODE && <GeocitiesBanner />}
           <Outlet />
+          {GEOCITIES_MODE && <GeocitiesFooter />}
         </div>
       </main>
     </div>

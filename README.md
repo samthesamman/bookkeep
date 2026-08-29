@@ -201,6 +201,12 @@ Optional:
 - `BOOKKEEP_ACCESS_TOKEN_EXPIRE_MINUTES` - Access token expiration (default: 30)
 - `BOOKKEEP_REFRESH_TOKEN_EXPIRE_DAYS` - Refresh token expiration (default: 7)
 
+Build-time (frontend):
+- `GEOCITIES_MODE` - set to `true` for a retro 90s GeoCities reskin of the whole
+  UI (Comic Sans, starfield wallpaper, marquee, hit counter). It's baked into the
+  frontend bundle, so set it in `.env` and run `docker compose build` (or build
+  with `VITE_GEOCITIES=true` for a local `npm run build`/`npm run dev`). Default `false`.
+
 ## Download Client Volumes
 
 If you use download clients (qBittorrent, NZBGet, SABnzbd) running in Docker alongside Bookkeep, you need shared volume mounts so the Bookkeep container can access completed downloads on the host filesystem.

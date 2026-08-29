@@ -7,6 +7,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        # Set GEOCITIES_MODE=true in .env for the retro 90s reskin, then rebuild.
+        GEOCITIES_MODE: ${GEOCITIES_MODE:-false}
     container_name: book-hound
     # Run as the same uid/gid that owns the CIFS mounts below.
     user: "1031:65538"

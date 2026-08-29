@@ -7,6 +7,10 @@ WORKDIR /app/frontend
 ARG APP_VERSION=dev
 ENV VITE_APP_VERSION=$APP_VERSION
 
+# Optional retro 90s GeoCities reskin. Set to "true" to enable (requires rebuild).
+ARG GEOCITIES_MODE=false
+ENV VITE_GEOCITIES=$GEOCITIES_MODE
+
 # Copy only dependency files first for better layer caching
 COPY package*.json ./
 
