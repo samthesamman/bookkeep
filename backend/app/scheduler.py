@@ -53,6 +53,11 @@ JOB_DEFINITIONS = {
         "description": "Sync Hardcover to-read/list books and auto-request them",
         "type": "PROCESS",
     },
+    "refresh_nyt_bestsellers": {
+        "default_interval": 24 * 60 * 60,  # 24 hours
+        "description": "Refresh NYT Best Sellers lists shown on the Discover page",
+        "type": "PROCESS",
+    },
     "send_availability_emails": {
         "default_interval": 5 * 60,  # 5 minutes
         "description": "Email available books to users who opted in when requesting",
@@ -311,6 +316,7 @@ async def initialize_jobs():
         sync_hardcover_lists,
         send_availability_emails,
         reconcile_calibre_library,
+        refresh_nyt_bestsellers,
     )
 
     # Map job names to their async functions
@@ -324,6 +330,7 @@ async def initialize_jobs():
         "sync_hardcover_lists": sync_hardcover_lists,
         "send_availability_emails": send_availability_emails,
         "reconcile_calibre_library": reconcile_calibre_library,
+        "refresh_nyt_bestsellers": refresh_nyt_bestsellers,
     }
     
     db = SessionLocal()

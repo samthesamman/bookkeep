@@ -1,27 +1,24 @@
 import { BookRow } from '@/components/books/BookRow';
 import { BookRowSkeleton } from '@/components/books/BookRowSkeleton';
 import { RequestsRow } from '@/components/books/RequestsRow';
-import { useTrendingBooks, usePopularBooks, useNewReleases } from '@/hooks/useHardcoverBooks';
+import { useBestsellers, useDiscoverStatus } from '@/hooks/useBestsellers';
 import { useQuery } from '@tanstack/react-query';
-import { requestsApi, settingsApi } from '@/lib/api';
-import { transformHardcoverBook } from '@/lib/hardcover';
+import { requestsApi } from '@/lib/api';
 import type { BookRequest } from '@/types/book';
-import { AlertCircle, Settings, ExternalLink, Sparkles, TrendingUp, Star, CalendarDays } from 'lucide-react';
+import { AlertCircle, Settings, ExternalLink, Sparkles } from 'lucide-react';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Link } from 'react-router-dom';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 
 export default function Discover() {
-  const { data: tokenStatus, isLoading: tokenLoading } = useQuery({
-    queryKey: ['hardcover-token-check'],
-    queryFn: () => settingsApi.checkHardcoverToken(),
-  });
+  const { data: status, isLoading: statusLoading } = useDiscoverStatus();
+  const hasKey = status?.has_nyt_key ?? false;
 
   const { data: requests = [] } = useQuery({
     queryKey: ['requests', 'recent'],
     queryFn: () => requestsApi.getAll(0, 4),
-    enabled: tokenStatus?.has_hardcover_token ?? false,
+    enabled: hasKey,
   });
 
   const recentRequests: BookRequest[] = requests
@@ -55,15 +52,10 @@ export default function Discover() {
       updatedAt: req.updated_at,
     }));
 
-  const { data: trendingBooks, isLoading: trendingLoading, error: trendingError } = useTrendingBooks(12);
-  const { data: popularBooks, isLoading: popularLoading, error: popularError } = usePopularBooks(12);
-  const { data: newReleases, isLoading: newLoading, error: newError } = useNewReleases(12);
+  const { data: bestsellers, isLoading: bestsellersLoading, error: bestsellersError } = useBestsellers();
+  const lists = bestsellers?.lists ?? [];
 
-  const discoverBooks = [
-    ...(trendingBooks || []),
-    ...(popularBooks || []),
-    ...(newReleases || []),
-  ];
+  const discoverBooks = lists.flatMap((list) => list.books);
   const discoverHardcoverIds = Array.from(
     new Set(
       discoverBooks
@@ -84,11 +76,8 @@ export default function Discover() {
     discoverRequestStatuses?.results.map((item) => [item.hardcover_id, item]) ?? []
   );
 
-  const hasError = trendingError || popularError || newError;
-  const hasToken = tokenStatus?.has_hardcover_token ?? false;
-
-  // Show splash page if no token
-  if (!tokenLoading && !hasToken) {
+  // Show splash page if the NYT Books API key is not configured
+  if (!statusLoading && !hasKey) {
     return (
       <div className="flex items-center justify-center min-h-[60vh]">
         <Card className="max-w-2xl w-full bg-card/50 backdrop-blur-xl border-border/50 shadow-2xl">
@@ -97,34 +86,27 @@ export default function Discover() {
               <Settings className="h-10 w-10 text-primary" />
             </div>
             <CardTitle className="text-3xl font-bold text-foreground tracking-tight">
-              Hardcover API Token Required
+              NYT Books API Key Required
             </CardTitle>
             <CardDescription className="text-base mt-3 text-muted-foreground">
-              To discover books and browse the catalog, you need to configure your Hardcover API token.
+              The Discover page shows the New York Times Best Sellers. Set the{' '}
+              <code className="text-foreground">NYT_BOOKS_API_KEY</code> environment variable to enable it.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-6 pt-4">
             <div className="text-center">
               <p className="text-sm text-muted-foreground">
-                Get your API token from{' '}
+                Register an app and enable the Books API at{' '}
                 <a
-                  href="https://hardcover.app"
+                  href="https://developer.nytimes.com/"
                   target="_blank"
                   rel="noopener noreferrer"
                   className="text-primary font-medium hover:underline underline-offset-4 inline-flex items-center gap-1.5 transition-colors"
                 >
-                  hardcover.app
+                  developer.nytimes.com
                   <ExternalLink className="h-3 w-3" />
                 </a>
               </p>
-            </div>
-            <div className="flex justify-center pt-2">
-              <Button asChild className="h-12 px-8 rounded-xl bg-primary hover:bg-primary/90 text-primary-foreground font-medium shadow-lg shadow-primary/20">
-                <Link to="/settings">
-                  <Settings className="h-4 w-4 mr-2" />
-                  Go to Settings
-                </Link>
-              </Button>
             </div>
           </CardContent>
         </Card>
@@ -152,62 +134,67 @@ export default function Discover() {
             Discover Books
           </h1>
           <p className="mt-3 text-lg text-muted-foreground max-w-2xl">
-            Explore trending titles, popular reads, and the latest releases. Your next favorite book is waiting.
+            This week's New York Times Best Sellers. Your next favorite book is waiting.
           </p>
         </div>
       </div>
 
-      {hasError && (
+      {bestsellersError && (
         <Alert variant="destructive" className="mb-6 rounded-xl border-rose-500/30 bg-rose-500/10">
           <AlertCircle className="h-4 w-4" />
           <AlertDescription>
-            Failed to load some books. Please check your Hardcover API configuration in Settings.
+            Failed to load the Best Sellers lists. Please try again later.
           </AlertDescription>
         </Alert>
       )}
 
-      {/* Trending */}
-      {trendingLoading ? (
-        <BookRowSkeleton title="Trending Now" />
-      ) : trendingBooks && trendingBooks.length > 0 ? (
-        <BookRow
-          title="Trending Now"
-          books={trendingBooks}
-          viewAllLink="/browse/trending"
-          requestStatusMap={discoverRequestStatusMap}
-        />
-      ) : null}
+      {bestsellersLoading ? (
+        <>
+          <BookRowSkeleton title="Combined Print & E-Book Fiction" />
+          <BookRowSkeleton title="Combined Print & E-Book Nonfiction" />
+        </>
+      ) : (
+        <>
+          {lists.slice(0, 1).map((list) => (
+            <BookRow
+              key={list.listNameEncoded}
+              title={list.listName}
+              books={list.books}
+              requestStatusMap={discoverRequestStatusMap}
+            />
+          ))}
 
-      {/* Recent Requests */}
-      <RequestsRow
-        title="Recent Requests"
-        requests={recentRequests}
-        viewAllLink="/requests"
-      />
+          {/* Recent Requests */}
+          <RequestsRow
+            title="Recent Requests"
+            requests={recentRequests}
+            viewAllLink="/requests"
+          />
 
-      {/* Popular */}
-      {popularLoading ? (
-        <BookRowSkeleton title="Popular This Month" />
-      ) : popularBooks && popularBooks.length > 0 ? (
-        <BookRow
-          title="Popular This Month"
-          books={popularBooks}
-          viewAllLink="/browse/popular"
-          requestStatusMap={discoverRequestStatusMap}
-        />
-      ) : null}
+          {lists.slice(1).map((list) => (
+            <BookRow
+              key={list.listNameEncoded}
+              title={list.listName}
+              books={list.books}
+              requestStatusMap={discoverRequestStatusMap}
+            />
+          ))}
 
-      {/* New Releases */}
-      {newLoading ? (
-        <BookRowSkeleton title="New Releases" />
-      ) : newReleases && newReleases.length > 0 ? (
-        <BookRow
-          title="New Releases"
-          books={newReleases}
-          viewAllLink="/browse/new"
-          requestStatusMap={discoverRequestStatusMap}
-        />
-      ) : null}
+          {lists.length === 0 && !bestsellersError && (
+            <Alert className="rounded-xl">
+              <AlertCircle className="h-4 w-4" />
+              <AlertDescription>
+                No Best Sellers to show yet. An admin can choose which lists appear in{' '}
+                <Link to="/settings" className="text-primary hover:underline">Settings</Link>.
+              </AlertDescription>
+            </Alert>
+          )}
+        </>
+      )}
+
+      {bestsellers?.attribution && (
+        <p className="pt-6 text-xs text-muted-foreground">{bestsellers.attribution}</p>
+      )}
     </div>
   );
 }

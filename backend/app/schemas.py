@@ -361,6 +361,37 @@ class HardcoverSearchResponse(BaseModel):
     query_type: Optional[str] = None
     results: Optional[List[HardcoverSearchResult]] = None
 
+# NYT Best Sellers schemas
+class NYTListName(BaseModel):
+    list_name: Optional[str] = None
+    list_name_encoded: str
+    display_name: Optional[str] = None
+    updated: Optional[str] = None  # 'WEEKLY' or 'MONTHLY'
+    oldest_published_date: Optional[str] = None
+    newest_published_date: Optional[str] = None
+
+class NYTListsResponse(BaseModel):
+    available: List[NYTListName] = []
+    selected: List[str] = []
+    has_nyt_key: bool = False
+
+class NYTListsUpdate(BaseModel):
+    lists: List[str] = []
+
+class NYTBestsellerList(BaseModel):
+    list_name: str
+    list_name_encoded: str
+    updated: Optional[str] = None
+    books: List[HardcoverBook] = []
+
+class NYTBestsellersResponse(BaseModel):
+    lists: List[NYTBestsellerList] = []
+    attribution: str = ""
+    generated_at: Optional[str] = None
+
+class DiscoverStatusResponse(BaseModel):
+    has_nyt_key: bool
+
 # Settings schemas
 class SettingsResponse(BaseModel):
     hardcover_api_token: Optional[str] = None

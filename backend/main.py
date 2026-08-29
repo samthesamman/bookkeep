@@ -9,7 +9,7 @@ import sys
 import os
 
 from app.database import engine, Base
-from app.routers import users, books, hardcover, requests, settings, readarr, jobs, booklore, audiobookshelf, auth, download_settings, downloads, direct_downloads, oidc, hardcover_sync, calibre, emails
+from app.routers import users, books, hardcover, requests, settings, readarr, jobs, booklore, audiobookshelf, auth, download_settings, downloads, direct_downloads, oidc, hardcover_sync, calibre, emails, discover
 from app.auth import get_current_user
 from app import cache
 
@@ -122,6 +122,10 @@ app.include_router(
 )
 app.include_router(
     hardcover.router, prefix="/api/hardcover", tags=["hardcover"],
+    dependencies=[Depends(get_current_user)],
+)
+app.include_router(
+    discover.router, prefix="/api/discover", tags=["discover"],
     dependencies=[Depends(get_current_user)],
 )
 app.include_router(requests.router, prefix="/api/requests", tags=["requests"])

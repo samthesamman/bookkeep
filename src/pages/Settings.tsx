@@ -43,7 +43,7 @@ import {
 } from '@/components/ui/table';
 import { toast } from 'sonner';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { settingsApi, readarrApi, jobsApi, bookloreApi, audiobookshelfApi, downloadSettingsApi, usersApi, type BookloreServer, type AudiobookshelfServer, type ProwlarrServer, type DownloadClient, type OidcSettingsResponse } from '@/lib/api';
+import { settingsApi, readarrApi, jobsApi, bookloreApi, audiobookshelfApi, downloadSettingsApi, usersApi, discoverApi, type BookloreServer, type AudiobookshelfServer, type ProwlarrServer, type DownloadClient, type OidcSettingsResponse } from '@/lib/api';
 import { usePageVisibility } from '@/hooks/usePageVisibility';
 
 interface ReadarrServer {
@@ -460,6 +460,103 @@ function EmailDeliveryCard() {
             size="sm"
             onClick={() => saveMutation.mutate(email.trim())}
             disabled={saveMutation.isPending || email.trim() === current}
+          >
+            <Save className="h-4 w-4 mr-2" />
+            {saveMutation.isPending ? 'Saving...' : 'Save'}
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function NytBestsellersCard() {
+  const queryClient = useQueryClient();
+  const [selected, setSelected] = useState<string[]>([]);
+
+  const { data, isLoading } = useQuery({
+    queryKey: ['discover', 'nyt-lists'],
+    queryFn: () => discoverApi.getNytLists(),
+  });
+
+  useEffect(() => {
+    if (data?.selected) setSelected(data.selected);
+  }, [data?.selected]);
+
+  const saveMutation = useMutation({
+    mutationFn: (lists: string[]) => discoverApi.setNytLists(lists),
+    onSuccess: (res) => {
+      toast.success('Best Sellers lists updated');
+      setSelected(res.selected);
+      queryClient.invalidateQueries({ queryKey: ['discover'] });
+    },
+    onError: (err: Error) => {
+      toast.error('Failed to update lists', { description: err.message });
+    },
+  });
+
+  const toggle = (slug: string) => {
+    setSelected((prev) =>
+      prev.includes(slug) ? prev.filter((s) => s !== slug) : [...prev, slug]
+    );
+  };
+
+  const available = data?.available ?? [];
+  const weekly = available.filter((l) => (l.updated || '').toUpperCase() === 'WEEKLY');
+  const monthly = available.filter((l) => (l.updated || '').toUpperCase() !== 'WEEKLY');
+  const unchanged =
+    JSON.stringify(selected) === JSON.stringify(data?.selected ?? []);
+
+  const renderGroup = (label: string, lists: typeof available) =>
+    lists.length > 0 && (
+      <div className="space-y-2">
+        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{label}</p>
+        <div className="grid gap-2 sm:grid-cols-2">
+          {lists.map((list) => (
+            <label key={list.list_name_encoded} className="flex items-center gap-2 text-sm">
+              <Checkbox
+                checked={selected.includes(list.list_name_encoded)}
+                onCheckedChange={() => toggle(list.list_name_encoded)}
+              />
+              <span className="text-foreground">{list.display_name || list.list_name}</span>
+            </label>
+          ))}
+        </div>
+      </div>
+    );
+
+  return (
+    <Card className="bg-card border-border">
+      <CardHeader>
+        <CardTitle className="text-foreground">Discover · Best Sellers</CardTitle>
+        <CardDescription>
+          Choose which New York Times Best Sellers lists appear on the Discover page. The order
+          you tick them is the order they appear.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {data && !data.has_nyt_key && (
+          <p className="text-xs text-amber-600 dark:text-amber-500">
+            NYT_BOOKS_API_KEY is not set — the Discover page is hidden until it is configured.
+          </p>
+        )}
+        {isLoading ? (
+          <p className="text-sm text-muted-foreground">Loading lists…</p>
+        ) : available.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            No lists available. Check that the NYT Books API key is valid.
+          </p>
+        ) : (
+          <>
+            {renderGroup('Weekly', weekly)}
+            {renderGroup('Monthly', monthly)}
+          </>
+        )}
+        <div className="flex justify-end">
+          <Button
+            size="sm"
+            onClick={() => saveMutation.mutate(selected)}
+            disabled={saveMutation.isPending || unchanged || available.length === 0}
           >
             <Save className="h-4 w-4 mr-2" />
             {saveMutation.isPending ? 'Saving...' : 'Save'}
@@ -1596,6 +1693,8 @@ export default function Settings() {
           </div>
         </CardContent>
           </Card>
+
+          <NytBestsellersCard />
 
           {/* Download Paths Settings */}
           <Card className="bg-card border-border">

@@ -305,6 +305,44 @@ export const hardcoverApi = {
   },
 };
 
+// Discover (NYT Best Sellers) API endpoints
+export interface NytListName {
+  list_name: string | null;
+  list_name_encoded: string;
+  display_name: string | null;
+  updated: string | null;
+  oldest_published_date: string | null;
+  newest_published_date: string | null;
+}
+
+export interface NytBestsellerList {
+  list_name: string;
+  list_name_encoded: string;
+  updated: string | null;
+  books: import('@/lib/hardcover').HardcoverBook[];
+}
+
+export const discoverApi = {
+  getStatus: () =>
+    apiRequest<{ has_nyt_key: boolean }>('/api/discover/status'),
+
+  getBestsellers: () =>
+    apiRequest<{ lists: NytBestsellerList[]; attribution: string; generated_at: string | null }>(
+      '/api/discover/bestsellers'
+    ),
+
+  getNytLists: () =>
+    apiRequest<{ available: NytListName[]; selected: string[]; has_nyt_key: boolean }>(
+      '/api/discover/nyt-lists'
+    ),
+
+  setNytLists: (lists: string[]) =>
+    apiRequest<{ available: NytListName[]; selected: string[]; has_nyt_key: boolean }>(
+      '/api/discover/nyt-lists',
+      { method: 'PUT', body: JSON.stringify({ lists }) }
+    ),
+};
+
 // Books API endpoints
 export const booksApi = {
   getAll: (skip: number = 0, limit: number = 100) =>

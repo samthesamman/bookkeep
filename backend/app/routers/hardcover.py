@@ -1528,6 +1528,91 @@ def _first_isbn(book_data: dict) -> Optional[str]:
     return None
 
 
+# Book fields used when resolving lists of books (trending/popular/bestsellers).
+_BOOK_LIST_FIELDS = """
+  id
+  title
+  slug
+  release_year
+  release_date
+  pages
+  description
+  cached_image
+  cached_contributors
+  rating
+  ratings_count
+  users_count
+  activities_count
+  compilation
+  default_ebook_edition_id
+  default_audio_edition_id
+  default_physical_edition_id
+  book_series {
+    series_id
+    position
+    series { id name }
+  }
+  contributions {
+    contribution
+    author { id name slug }
+  }
+  taggings(limit: 5) { tag { tag } }
+"""
+
+
+def _normalize_isbn(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return None
+    cleaned = value.replace("-", "").replace(" ", "").strip()
+    return cleaned or None
+
+
+async def resolve_books_by_isbns(isbns: list[str], db: Session) -> dict[str, dict]:
+    """Resolve a list of ISBNs to raw Hardcover book payloads.
+
+    Queries the top-level ``editions`` collection in chunks and returns a map of
+    ``normalized_isbn -> book_data`` for every ISBN that matched a Hardcover
+    edition.  ISBNs with no match are simply absent from the result.
+    """
+    normalized = [n for n in (_normalize_isbn(i) for i in isbns) if n]
+    if not normalized:
+        return {}
+
+    query = """
+    query EditionsByIsbn($isbns: [String!]!) {
+      editions(
+        where: {_or: [{isbn_13: {_in: $isbns}}, {isbn_10: {_in: $isbns}}]}
+        limit: 500
+      ) {
+        isbn_13
+        isbn_10
+        book {
+          %s
+        }
+      }
+    }
+    """ % _BOOK_LIST_FIELDS
+
+    resolved: dict[str, dict] = {}
+    chunk_size = 50
+    for start in range(0, len(normalized), chunk_size):
+        chunk = normalized[start:start + chunk_size]
+        try:
+            result = await execute_graphql(query, {"isbns": chunk}, db=db)
+        except Exception as exc:  # noqa: BLE001 - best effort, keep going
+            logger.warning("resolve_books_by_isbns_failed", error=str(exc))
+            continue
+        for edition in result.get("editions", []) or []:
+            book = edition.get("book")
+            if not book or not book.get("id"):
+                continue
+            for isbn in (edition.get("isbn_13"), edition.get("isbn_10")):
+                key = _normalize_isbn(isbn)
+                if key and key not in resolved:
+                    resolved[key] = book
+    return resolved
+
+
 @router.get("/details/{book_id}", response_model=schemas.HardcoverBookDetailResponse)
 async def get_book_details(
     book_id: int,

@@ -17,6 +17,7 @@ REDIS_URL = os.getenv("REDIS_URL", "")
 # Cache TTLs (in seconds)
 CACHE_TTL = {
     "trending": 86400,     # 24 hours
+    "nyt_bestsellers": 86400, # 24 hours
     "popular": 86400,      # 24 hours
     "new_releases": 86400, # 24 hours
     "search": 1800,        # 30 minutes
@@ -292,6 +293,11 @@ CACHE_RESOURCES = {
         "name": "Discovery",
         "description": "Trending, popular, and new release lists",
         "patterns": ["trending:*", "popular:*", "new_releases:*"],
+    },
+    "bestsellers": {
+        "name": "Best Sellers",
+        "description": "NYT Best Sellers lists shown on the Discover page",
+        "patterns": ["nyt_bestsellers:*"],
     },
     "requests": {
         "name": "Requests",

@@ -2277,3 +2277,26 @@ async def sync_hardcover_lists() -> None:
     for uid in user_ids:
         await sync_hardcover_lists_for_user(uid)
     logger.info("hardcover_sync_job_complete", user_count=len(user_ids))
+
+
+async def refresh_nyt_bestsellers() -> None:
+    """Pre-warm the NYT Best Sellers cache used by the Discover page."""
+    from app.routers.discover import build_bestsellers_payload
+    from app.services.nyt_bestsellers import get_nyt_api_key
+
+    if not get_nyt_api_key():
+        logger.info("nyt_bestsellers_job_skipped", reason="no_api_key")
+        return
+
+    db: Session = SessionLocal()
+    try:
+        payload = await build_bestsellers_payload(db)
+        logger.info(
+            "nyt_bestsellers_job_complete",
+            list_count=len(payload.lists),
+            book_count=sum(len(lst.books) for lst in payload.lists),
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.error("nyt_bestsellers_job_error", error=str(e))
+    finally:
+        db.close()
