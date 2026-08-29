@@ -275,6 +275,99 @@ def _titles_match(a: set, b: set) -> bool:
     return len(a & b) / len(a | b) >= 0.7
 
 
+def _isbn_key(value: Optional[str]) -> str:
+    """Normalize an ISBN to bare digits (plus a trailing X check digit)."""
+    if not value:
+        return ""
+    return "".join(c for c in value.lower() if c.isdigit() or c == "x")
+
+
+def _load_catalog(conn) -> tuple[list, dict]:
+    """Return (catalog, isbn_map) for the whole library.
+
+    catalog: list of (book_id, title_tokens, author_tokens)
+    isbn_map: {normalized_isbn: book_id}
+    """
+    rows = conn.execute(
+        """
+        SELECT b.id AS id, b.title AS title, b.author_sort AS author_sort,
+               (SELECT GROUP_CONCAT(a.name, ' ')
+                  FROM books_authors_link bal JOIN authors a ON a.id = bal.author
+                 WHERE bal.book = b.id) AS authors
+          FROM books b
+        """
+    ).fetchall()
+    catalog = [
+        (
+            int(r["id"]),
+            _title_tokens(r["title"] or ""),
+            {w for w in _norm(f"{r['authors'] or ''} {r['author_sort'] or ''}").split() if len(w) > 1},
+        )
+        for r in rows
+    ]
+
+    isbn_map: dict[str, int] = {}
+    for r in conn.execute(
+        "SELECT book, val FROM identifiers WHERE type IN ('isbn','isbn13','isbn10')"
+    ):
+        key = _isbn_key(r["val"])
+        if key:
+            isbn_map.setdefault(key, int(r["book"]))
+    return catalog, isbn_map
+
+
+def _match_against_catalog(
+    title: str,
+    author: Optional[str],
+    isbn: Optional[str],
+    catalog: list,
+    isbn_map: dict,
+) -> Optional[int]:
+    key = _isbn_key(isbn)
+    if key and key in isbn_map:
+        return isbn_map[key]
+
+    want_title = _title_tokens(title or "")
+    if not want_title:
+        return None
+    want_author = {w for w in _norm(author or "").split() if len(w) > 1}
+
+    best_id: Optional[int] = None
+    best_score = -1.0
+    for cand_id, cand_title, cand_auth in catalog:
+        if not _titles_match(want_title, cand_title):
+            continue
+        author_score = 0.0
+        if want_author and cand_auth:
+            author_score = len(want_author & cand_auth) / len(want_author)
+            # A title-only match with a clearly different author is not it.
+            if author_score == 0 and len(want_title) < 3:
+                continue
+        score = len(want_title & cand_title) / max(len(want_title | cand_title), 1) + author_score
+        if score > best_score:
+            best_score = score
+            best_id = cand_id
+    return best_id
+
+
+def match_books(
+    library_path: str,
+    items: list[tuple[str, Optional[str], Optional[str]]],
+) -> list[Optional[int]]:
+    """Match many (title, author, isbn) tuples against the library in one pass.
+
+    Returns a list of Calibre book ids (or None), aligned with ``items``.
+    """
+    if not items:
+        return []
+    conn = _connect(library_path)
+    try:
+        catalog, isbn_map = _load_catalog(conn)
+    finally:
+        conn.close()
+    return [_match_against_catalog(t, a, i, catalog, isbn_map) for (t, a, i) in items]
+
+
 def find_book_match(
     library_path: str,
     title: str,
@@ -284,61 +377,9 @@ def find_book_match(
     """Return the Calibre book id that best matches the given metadata, or None.
 
     Matches on ISBN identifier first, then on normalized title tokens with an
-    author-name tie-breaker. Scans the whole library (cheap for typical sizes).
+    author-name tie-breaker.
     """
-    conn = _connect(library_path)
-    try:
-        if isbn:
-            digits = "".join(c for c in isbn if c.isdigit() or c in "xX")
-            if digits:
-                row = conn.execute(
-                    "SELECT book FROM identifiers WHERE type IN ('isbn','isbn13','isbn10') "
-                    "AND lower(replace(replace(val,'-',''),' ','')) = ? LIMIT 1",
-                    (digits.lower(),),
-                ).fetchone()
-                if row:
-                    return int(row["book"])
-
-        want_title = _title_tokens(title)
-        if not want_title:
-            return None
-        want_author = {w for w in _norm(author or "").split() if len(w) > 1}
-
-        rows = conn.execute(
-            """
-            SELECT b.id AS id, b.title AS title, b.author_sort AS author_sort,
-                   (SELECT GROUP_CONCAT(a.name, ' ')
-                      FROM books_authors_link bal JOIN authors a ON a.id = bal.author
-                     WHERE bal.book = b.id) AS authors
-              FROM books b
-            """
-        ).fetchall()
-
-        best_id: Optional[int] = None
-        best_score = -1.0
-        for row in rows:
-            cand_title = _title_tokens(row["title"] or "")
-            if not _titles_match(want_title, cand_title):
-                continue
-
-            cand_auth = {
-                w for w in _norm(f"{row['authors'] or ''} {row['author_sort'] or ''}").split()
-                if len(w) > 1
-            }
-            author_score = 0.0
-            if want_author and cand_auth:
-                author_score = len(want_author & cand_auth) / len(want_author)
-                # A title-only match with a clearly different author is not it.
-                if author_score == 0 and len(want_title) < 3:
-                    continue
-
-            score = len(want_title & cand_title) / max(len(want_title | cand_title), 1) + author_score
-            if score > best_score:
-                best_score = score
-                best_id = int(row["id"])
-        return best_id
-    finally:
-        conn.close()
+    return match_books(library_path, [(title, author, isbn)])[0]
 
 
 def pick_format(library_path: str, book_id: int, want: str) -> Optional[str]:

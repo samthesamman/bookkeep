@@ -58,6 +58,11 @@ JOB_DEFINITIONS = {
         "description": "Email available books to users who opted in when requesting",
         "type": "PROCESS",
     },
+    "reconcile_calibre_library": {
+        "default_interval": 60,  # 1 minute
+        "description": "Mark ebook requests available once they appear in the Calibre library",
+        "type": "PROCESS",
+    },
 }
 
 
@@ -305,6 +310,7 @@ async def initialize_jobs():
         sync_download_states,
         sync_hardcover_lists,
         send_availability_emails,
+        reconcile_calibre_library,
     )
 
     # Map job names to their async functions
@@ -317,6 +323,7 @@ async def initialize_jobs():
         "sync_download_states": sync_download_states,
         "sync_hardcover_lists": sync_hardcover_lists,
         "send_availability_emails": send_availability_emails,
+        "reconcile_calibre_library": reconcile_calibre_library,
     }
     
     db = SessionLocal()

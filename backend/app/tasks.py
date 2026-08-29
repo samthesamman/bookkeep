@@ -344,7 +344,7 @@ async def run_background_refresh():
 EBOOK_LIBRARY_WAIT_TIMEOUT = timedelta(days=7)
 
 
-def reconcile_ebook_library_imports(db: Session) -> int:
+def reconcile_ebook_library_imports(db: Session, library_path: Optional[str] = None) -> int:
     """Promote completed ebook downloads to 'imported' once Calibre has indexed them.
 
     The orchestrator parks ebook imports in 'awaiting_library' when a Calibre
@@ -367,23 +367,25 @@ def reconcile_ebook_library_imports(db: Session) -> int:
     if not tasks:
         return 0
 
-    library_path = get_active_library_path(db)
+    if library_path is None:
+        library_path = get_active_library_path(db)
+
+    matched_ids: dict[int, Optional[int]] = {}
+    if library_path:
+        try:
+            results = calibre_service.match_books(
+                library_path,
+                [(t.book.title, t.book.author, t.book.isbn) for t in tasks if t.book],
+            )
+            for t, mid in zip([t for t in tasks if t.book], results):
+                matched_ids[t.id] = mid
+        except calibre_service.CalibreError as exc:
+            logger.warning("ebook_library_reconcile_lookup_failed", error=str(exc))
 
     now = datetime.now(timezone.utc)
     promoted = 0
     for task in tasks:
-        found = False
-        if library_path:
-            book = task.book
-            if book:
-                try:
-                    match_id = calibre_service.find_book_match(
-                        library_path, book.title, book.author, book.isbn
-                    )
-                    found = match_id is not None
-                except calibre_service.CalibreError as exc:
-                    logger.warning("ebook_library_reconcile_lookup_failed", task_id=task.id, error=str(exc))
-                    continue
+        found = matched_ids.get(task.id) is not None
 
         timed_out = False
         if not found:
@@ -423,10 +425,90 @@ async def check_processing_requests():
     from app.routers.requests import update_processing_requests_status
     db: Session = SessionLocal()
     try:
-        reconcile_ebook_library_imports(db)
+        # Belt-and-suspenders: reconcile_calibre_library also does this every
+        # minute, but keep a slower fallback in case that job is disabled.
+        try:
+            reconcile_ebook_library_imports(db)
+        except Exception as e:
+            logger.error("reconcile_ebook_library_imports_error", error=str(e))
+            db.rollback()
         await update_processing_requests_status(db)
     except Exception as e:
         logger.error("check_processing_requests_error", error=str(e))
+    finally:
+        db.close()
+
+
+async def reconcile_calibre_library():
+    """Every minute: treat the Calibre library as the source of truth for ebooks.
+
+    1. Promotes completed ebook downloads that Calibre has now indexed.
+    2. Flips any not-yet-available ebook request (pending / approved / processing
+       / not_found) to 'available' once its book is in the library — however it
+       got there (download, manual add, side-load).
+    The whole library is loaded once and every request matched against it.
+    """
+    from sqlalchemy.orm import joinedload
+    from app.models import BookRequest
+    from app.routers.calibre import get_active_library_path
+    from app.services import calibre_service
+
+    db: Session = SessionLocal()
+    try:
+        library_path = get_active_library_path(db)
+        if not library_path:
+            return
+
+        try:
+            reconcile_ebook_library_imports(db, library_path=library_path)
+        except Exception as e:
+            logger.error("reconcile_ebook_library_imports_error", error=str(e))
+            db.rollback()
+
+        reqs = (
+            db.query(BookRequest)
+            .options(joinedload(BookRequest.book))
+            .filter(
+                BookRequest.format == "ebook",
+                BookRequest.status.in_(["pending", "approved", "processing", "not_found"]),
+            )
+            .all()
+        )
+        reqs = [r for r in reqs if r.book]
+        if not reqs:
+            return
+
+        try:
+            matches = calibre_service.match_books(
+                library_path, [(r.book.title, r.book.author, r.book.isbn) for r in reqs]
+            )
+        except calibre_service.CalibreError as exc:
+            logger.warning("reconcile_calibre_library_lookup_failed", error=str(exc))
+            return
+
+        now = datetime.now(timezone.utc)
+        updated = 0
+        for req, calibre_id in zip(reqs, matches):
+            if calibre_id is None:
+                continue
+            prev = req.status
+            req.status = "available"
+            req.updated_at = now
+            req.book.ebook_available = True
+            updated += 1
+            logger.info(
+                "request_available_from_calibre",
+                request_id=req.id,
+                book_id=req.book_id,
+                calibre_id=calibre_id,
+                previous_status=prev,
+            )
+        if updated:
+            db.commit()
+            logger.info("reconcile_calibre_library_complete", updated=updated, checked=len(reqs))
+    except Exception as e:
+        logger.error("reconcile_calibre_library_error", error=str(e))
+        db.rollback()
     finally:
         db.close()
 

@@ -853,17 +853,17 @@ async def update_processing_requests_status(db: Session) -> None:
         not_found_after = timedelta(hours=6)
         now = datetime.now(timezone.utc)
 
-        # Check open requests: "processing" ones can also time out to not_found,
-        # while "pending"/"approved" ones are only promoted when the book turns up.
+        # Get all processing requests
         processing_requests = db.query(models.BookRequest).options(
             joinedload(models.BookRequest.book)
         ).filter(
-            models.BookRequest.status.in_(["processing", "approved", "pending"])
+            models.BookRequest.status == "processing"
         ).all()
 
         # If a Calibre library is configured it is the source of truth for
         # ebooks: a request is available as soon as the book is in that library,
         # regardless of how it got there (download, manual add, side-load).
+        # (reconcile_calibre_library covers pending/approved/not_found separately.)
         calibre_library_path = get_active_library_path(db)
 
         if not processing_requests:
@@ -943,11 +943,6 @@ async def update_processing_requests_status(db: Session) -> None:
                            request_id=req.id,
                            book_title=req.book.title,
                            import_status=pending_import.import_status)
-                continue
-
-            # Only "processing" requests fall through to the download/not_found
-            # checks below; pending/approved just wait for the book to appear.
-            if req.status != "processing":
                 continue
 
             # No completed task — check if we should mark as not_found
