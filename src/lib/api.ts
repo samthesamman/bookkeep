@@ -1264,7 +1264,19 @@ export interface CalibreSettings {
   error: string | null;
 }
 
-export interface CalibreBook {
+/** Fields added by the local metadata overlay (calibre_book_links). */
+export interface CalibreOverlayFields {
+  metadata_source?: 'calibre' | 'overlay';
+  linked_book_id?: number | null;
+  link_source?: 'download' | 'manual' | 'fuzzy' | null;
+  link_confirmed?: boolean;
+  hardcover_id?: number | null;
+  overlay_cover_url?: string | null;
+  page_count?: number | null;
+  genres?: string[] | null;
+}
+
+export interface CalibreBook extends CalibreOverlayFields {
   id: number;
   title: string;
   authors: string;
@@ -1284,6 +1296,18 @@ export interface CalibreBookDetail extends CalibreBook {
   languages: string[];
   identifiers: Record<string, string>;
   format_details: Array<{ format: string; size: number | null; name: string }>;
+}
+
+export interface CalibreOverlaySettings {
+  enabled: boolean;
+  prefer_local: boolean;
+}
+
+export interface CalibreLinkResponse {
+  linked_book_id: number | null;
+  link_source: string | null;
+  link_confirmed: boolean;
+  hardcover_id: number | null;
 }
 
 export interface CalibreBooksResponse {
@@ -1362,4 +1386,29 @@ export const calibreApi = {
       `/api/calibre/books/${id}/email`,
       { method: 'POST', body: JSON.stringify({ format }) },
     ),
+
+  getOverlaySettings: () =>
+    apiRequest<CalibreOverlaySettings>('/api/calibre/overlay-settings'),
+
+  updateOverlaySettings: (data: CalibreOverlaySettings) =>
+    apiRequest<CalibreOverlaySettings>('/api/calibre/overlay-settings', {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+
+  linkBook: (id: number, target: { book_id?: number; hardcover_id?: number }) =>
+    apiRequest<CalibreLinkResponse>(`/api/calibre/books/${id}/link`, {
+      method: 'PUT',
+      body: JSON.stringify(target),
+    }),
+
+  clearLink: (id: number) =>
+    apiRequest<{ removed: boolean }>(`/api/calibre/books/${id}/link`, {
+      method: 'DELETE',
+    }),
+
+  refreshMetadata: (id: number) =>
+    apiRequest<CalibreLinkResponse>(`/api/calibre/books/${id}/refresh-metadata`, {
+      method: 'POST',
+    }),
 };

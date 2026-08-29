@@ -22,12 +22,30 @@ export default function CalibreSettings() {
     queryFn: () => calibreApi.getSettings(),
   });
 
+  const { data: overlay } = useQuery({
+    queryKey: ['calibre-overlay-settings'],
+    queryFn: () => calibreApi.getOverlaySettings(),
+  });
+
   useEffect(() => {
     if (settings) {
       setLibraryPath(settings.library_path || '');
       setEnabled(settings.enabled);
     }
   }, [settings]);
+
+  const overlayMutation = useMutation({
+    mutationFn: (data: { enabled: boolean; prefer_local: boolean }) =>
+      calibreApi.updateOverlaySettings(data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['calibre-overlay-settings'] });
+      queryClient.invalidateQueries({ queryKey: ['calibre-books'] });
+      toast.success('Metadata settings saved!');
+    },
+    onError: (error: Error) => {
+      toast.error('Failed to save', { description: error.message });
+    },
+  });
 
   const saveMutation = useMutation({
     mutationFn: () =>
@@ -136,6 +154,45 @@ export default function CalibreSettings() {
             readable by the Bookkeep backend (mount it into the container if you run in Docker).
           </p>
         </div>
+
+        {overlay && (
+          <div className="space-y-3 rounded-lg border border-border p-4">
+            <div className="flex items-center justify-between">
+              <div className="space-y-1">
+                <Label className="text-foreground font-medium">
+                  Enrich library metadata from Hardcover
+                </Label>
+                <p className="text-sm text-muted-foreground">
+                  Overlay covers, descriptions, ratings, series and genres onto matched
+                  books. Calibre is never modified.
+                </p>
+              </div>
+              <Switch
+                checked={overlay.enabled}
+                onCheckedChange={(v) =>
+                  overlayMutation.mutate({ enabled: v, prefer_local: overlay.prefer_local })
+                }
+              />
+            </div>
+            <div className="flex items-center justify-between">
+              <div className="space-y-1">
+                <Label className="text-foreground font-medium">
+                  Prefer Hardcover metadata over Calibre's
+                </Label>
+                <p className="text-sm text-muted-foreground">
+                  When off, Hardcover data only fills fields Calibre leaves empty.
+                </p>
+              </div>
+              <Switch
+                checked={overlay.prefer_local}
+                disabled={!overlay.enabled}
+                onCheckedChange={(v) =>
+                  overlayMutation.mutate({ enabled: overlay.enabled, prefer_local: v })
+                }
+              />
+            </div>
+          </div>
+        )}
 
         {testResult && (
           <div

@@ -353,7 +353,7 @@ def reconcile_ebook_library_imports(db: Session, library_path: Optional[str] = N
     """
     from app.models import DownloadTask
     from app.routers.calibre import get_active_library_path
-    from app.services import calibre_service
+    from app.services import calibre_service, calibre_link_service
 
     tasks = (
         db.query(DownloadTask)
@@ -406,6 +406,22 @@ def reconcile_ebook_library_imports(db: Session, library_path: Optional[str] = N
         )
         if task.book:
             task.book.ebook_available = True
+        if found and task.book:
+            # Exact link: this download is this Calibre book.
+            try:
+                calibre_link_service.upsert_link(
+                    db,
+                    calibre_book_id=matched_ids[task.id],
+                    book_id=task.book_id,
+                    source="download",
+                    confidence=None,
+                    confirmed=True,
+                    calibre_isbn=task.book.isbn,
+                    calibre_title=task.book.title,
+                    commit=False,
+                )
+            except Exception as exc:  # never block the import promotion
+                logger.warning("calibre_link_on_import_failed", task_id=task.id, error=str(exc))
         promoted += 1
         logger.info(
             "ebook_import_confirmed",
@@ -451,7 +467,7 @@ async def reconcile_calibre_library():
     from sqlalchemy.orm import joinedload
     from app.models import BookRequest
     from app.routers.calibre import get_active_library_path
-    from app.services import calibre_service
+    from app.services import calibre_service, calibre_link_service
 
     db: Session = SessionLocal()
     try:
@@ -463,6 +479,26 @@ async def reconcile_calibre_library():
             reconcile_ebook_library_imports(db, library_path=library_path)
         except Exception as e:
             logger.error("reconcile_ebook_library_imports_error", error=str(e))
+            db.rollback()
+
+        # Keep the Calibre <-> Book link table healthy, then enrich any
+        # linked books not yet filled from Hardcover. The heal/backfill scan is
+        # throttled — download and request links are created inline elsewhere,
+        # so this only needs to catch side-loads periodically.
+        global _LAST_LINK_MAINTENANCE
+        now_ts = datetime.now(timezone.utc)
+        if (now_ts - _LAST_LINK_MAINTENANCE) >= LINK_MAINTENANCE_INTERVAL:
+            _LAST_LINK_MAINTENANCE = now_ts
+            try:
+                calibre_link_service.heal_stale_links(db, library_path)
+                calibre_link_service.backfill_fuzzy_links(db, library_path)
+            except Exception as e:
+                logger.error("calibre_link_maintenance_error", error=str(e))
+                db.rollback()
+        try:
+            await _enrich_linked_calibre_books(db)
+        except Exception as e:
+            logger.error("calibre_link_enrich_error", error=str(e))
             db.rollback()
 
         reqs = (
@@ -496,6 +532,21 @@ async def reconcile_calibre_library():
             req.updated_at = now
             req.book.ebook_available = True
             updated += 1
+            # A request that resolved to a library book is a strong link.
+            try:
+                calibre_link_service.upsert_link(
+                    db,
+                    calibre_book_id=calibre_id,
+                    book_id=req.book_id,
+                    source="download" if req.edition_id or req.book.hardcover_id else "fuzzy",
+                    confidence=None,
+                    confirmed=bool(req.edition_id or req.book.hardcover_id),
+                    calibre_isbn=req.book.isbn,
+                    calibre_title=req.book.title,
+                    commit=False,
+                )
+            except Exception as exc:
+                logger.warning("calibre_link_on_request_failed", request_id=req.id, error=str(exc))
             logger.info(
                 "request_available_from_calibre",
                 request_id=req.id,
@@ -511,6 +562,63 @@ async def reconcile_calibre_library():
         db.rollback()
     finally:
         db.close()
+
+
+# Books enriched per reconcile run, to stay within Hardcover's rate limits.
+CALIBRE_ENRICH_BATCH = 10
+
+# The full library <-> Book match scan is expensive; run it at most this often.
+LINK_MAINTENANCE_INTERVAL = timedelta(minutes=10)
+_LAST_LINK_MAINTENANCE = datetime.min.replace(tzinfo=timezone.utc)
+
+
+async def _enrich_linked_calibre_books(db: Session) -> int:
+    """Fill Hardcover metadata for linked Calibre books that have none yet.
+
+    Runs a small batch each minute (from reconcile_calibre_library). Covers both
+    exact download links and fuzzy links; books already refreshed are skipped.
+    """
+    from app.models import Book, CalibreBookLink
+    from app.routers.calibre import _bool_setting, OVERLAY_ENABLED_KEY
+    from app.services.hardcover_metadata import enrich_book_from_hardcover
+
+    if not _bool_setting(db, OVERLAY_ENABLED_KEY, True):
+        return 0
+
+    rows = (
+        db.query(CalibreBookLink)
+        .join(Book, Book.id == CalibreBookLink.book_id)
+        .filter(Book.last_refreshed.is_(None))
+        .limit(CALIBRE_ENRICH_BATCH)
+        .all()
+    )
+    if not rows:
+        return 0
+
+    enriched = 0
+    for link in rows:
+        book = link.book
+        try:
+            changed = await enrich_book_from_hardcover(db, book)
+        except Exception as exc:
+            logger.warning("calibre_book_enrich_failed", book_id=book.id, error=str(exc))
+            db.rollback()
+            continue
+        # Stamp last_refreshed even on a no-op so we do not retry every minute.
+        if book.last_refreshed is None:
+            book.last_refreshed = datetime.now(timezone.utc)
+        try:
+            db.commit()
+            if changed:
+                enriched += 1
+        except Exception as exc:
+            db.rollback()
+            logger.warning("calibre_book_enrich_commit_failed", book_id=book.id, error=str(exc))
+        await asyncio.sleep(0.5)
+
+    if enriched:
+        logger.info("calibre_book_enrich_complete", enriched=enriched, checked=len(rows))
+    return enriched
 
 
 # Give up auto-emailing a request after this many failed SMTP attempts.

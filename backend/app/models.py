@@ -71,6 +71,12 @@ class Book(Base):
 
     requests = relationship("BookRequest", back_populates="book")
     download_tasks = relationship("DownloadTask", back_populates="book", cascade="all, delete-orphan")
+    calibre_link = relationship(
+        "CalibreBookLink",
+        back_populates="book",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
 
     @property
     def is_available(self):
@@ -394,3 +400,32 @@ class CalibreSettings(Base):
     enabled = Column(Boolean, default=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+
+class CalibreBookLink(Base):
+    """Links a book in the local Calibre library to a bookkeep ``Book`` row.
+
+    Calibre stays read-only; this table is how the app overlays its own
+    (Hardcover-sourced) metadata onto the library view. One row per Calibre
+    book id — a single-library assumption that matches ``calibre_settings``
+    being a one-row table. A ``library_id`` column would be the seam for
+    multi-library support later.
+    """
+    __tablename__ = "calibre_book_links"
+
+    id = Column(Integer, primary_key=True, index=True)
+    calibre_book_id = Column(Integer, nullable=False, unique=True, index=True)
+    book_id = Column(Integer, ForeignKey("books.id", ondelete="CASCADE"), nullable=False, index=True)
+    # How the link was made: 'download' (exact, from a completed request),
+    # 'manual' (user picked it), or 'fuzzy' (title/author/isbn matcher).
+    source = Column(String, nullable=False, default="fuzzy")
+    confidence = Column(Float, nullable=True)  # matcher score; NULL for exact links
+    confirmed = Column(Boolean, nullable=False, default=False)
+    # Snapshot of the Calibre-side identity, used to re-point the link if
+    # Calibre book ids shift (delete + re-add).
+    calibre_isbn = Column(String, nullable=True)
+    calibre_title = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    book = relationship("Book", back_populates="calibre_link")

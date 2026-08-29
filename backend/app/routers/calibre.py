@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from app import models
 from app.auth import get_current_user, require_admin
 from app.database import get_db
-from app.services import calibre_service
+from app.services import calibre_service, calibre_link_service
 
 logger = structlog.get_logger()
 
@@ -79,6 +79,25 @@ def _require_library(db: Session) -> str:
     except calibre_service.CalibreError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return row.library_path
+
+
+OVERLAY_ENABLED_KEY = "calibre_overlay_enabled"
+OVERLAY_PREFER_LOCAL_KEY = "calibre_overlay_prefer_local"
+
+
+def _bool_setting(db: Session, key: str, default: bool) -> bool:
+    row = db.query(models.AppSettings).filter(models.AppSettings.key == key).first()
+    if row is None or row.value is None:
+        return default
+    return str(row.value).lower() not in ("false", "0", "")
+
+
+def _overlay_config(db: Session) -> tuple[bool, bool]:
+    """Return (overlay_enabled, prefer_local)."""
+    return (
+        _bool_setting(db, OVERLAY_ENABLED_KEY, True),
+        _bool_setting(db, OVERLAY_PREFER_LOCAL_KEY, False),
+    )
 
 
 def get_active_library_path(db: Session) -> Optional[str]:
@@ -168,6 +187,18 @@ async def list_books(
         )
     except calibre_service.CalibreError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+
+    overlay_enabled, prefer_local = _overlay_config(db)
+    if overlay_enabled and books:
+        links = calibre_link_service.get_links_for_calibre_ids(
+            db, [b["id"] for b in books]
+        )
+        books = [
+            calibre_link_service.overlay_book_dict(
+                b, links.get(b["id"]), prefer_local=prefer_local
+            )
+            for b in books
+        ]
     return {"books": books, "total": total, "page": page, "page_size": page_size}
 
 
@@ -184,6 +215,13 @@ async def get_book(
         raise HTTPException(status_code=400, detail=str(exc))
     if book is None:
         raise HTTPException(status_code=404, detail="Book not found")
+
+    overlay_enabled, prefer_local = _overlay_config(db)
+    if overlay_enabled:
+        link = calibre_link_service.get_links_for_calibre_ids(db, [book_id]).get(book_id)
+        book = calibre_link_service.overlay_book_dict(
+            book, link, prefer_local=prefer_local
+        )
     return book
 
 
@@ -272,4 +310,171 @@ async def email_book_to_self(
         success=True,
         message=f"Sent to {current_user.book_delivery_email}",
         recipient=current_user.book_delivery_email,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Metadata overlay: link a Calibre book to a bookkeep Book / Hardcover record
+# ---------------------------------------------------------------------------
+class OverlaySettings(BaseModel):
+    enabled: bool
+    prefer_local: bool
+
+
+class LinkRequest(BaseModel):
+    book_id: Optional[int] = None
+    hardcover_id: Optional[int] = None
+
+
+class LinkResponse(BaseModel):
+    linked_book_id: Optional[int]
+    link_source: Optional[str]
+    link_confirmed: bool
+    hardcover_id: Optional[int]
+
+
+@router.get("/overlay-settings", response_model=OverlaySettings)
+async def get_overlay_settings(
+    db: Session = Depends(get_db),
+    _: models.User = Depends(get_current_user),
+):
+    enabled, prefer_local = _overlay_config(db)
+    return OverlaySettings(enabled=enabled, prefer_local=prefer_local)
+
+
+@router.put("/overlay-settings", response_model=OverlaySettings)
+async def update_overlay_settings(
+    data: OverlaySettings,
+    db: Session = Depends(get_db),
+    _: models.User = Depends(require_admin),
+):
+    for key, value in (
+        (OVERLAY_ENABLED_KEY, data.enabled),
+        (OVERLAY_PREFER_LOCAL_KEY, data.prefer_local),
+    ):
+        row = db.query(models.AppSettings).filter(models.AppSettings.key == key).first()
+        if row is None:
+            row = models.AppSettings(key=key, value="true" if value else "false")
+            db.add(row)
+        else:
+            row.value = "true" if value else "false"
+    db.commit()
+    logger.info("calibre_overlay_settings_updated", enabled=data.enabled, prefer_local=data.prefer_local)
+    return data
+
+
+async def _resolve_book_for_link(
+    data: LinkRequest, db: Session
+) -> models.Book:
+    if data.book_id:
+        book = db.query(models.Book).filter(models.Book.id == data.book_id).first()
+        if book is None:
+            raise HTTPException(status_code=404, detail="Book not found")
+        return book
+    if data.hardcover_id:
+        book = (
+            db.query(models.Book)
+            .filter(models.Book.hardcover_id == data.hardcover_id)
+            .first()
+        )
+        if book is not None:
+            return book
+        from app.routers.settings import get_hardcover_token
+        from app.tasks import _ensure_book_in_db
+
+        token, _src = get_hardcover_token(db)
+        if not token:
+            raise HTTPException(status_code=400, detail="Hardcover API token is not configured")
+        book = await _ensure_book_in_db(data.hardcover_id, token, db)
+        if book is None:
+            raise HTTPException(status_code=404, detail="Book not found on Hardcover")
+        return book
+    raise HTTPException(status_code=400, detail="Provide either book_id or hardcover_id")
+
+
+@router.put("/books/{book_id}/link", response_model=LinkResponse)
+async def set_book_link(
+    book_id: int,
+    data: LinkRequest,
+    db: Session = Depends(get_db),
+    _: models.User = Depends(require_admin),
+):
+    """Manually link this Calibre book to a bookkeep Book / Hardcover record."""
+    library_path = _require_library(db)
+    cal = calibre_service.get_book(library_path, book_id)
+    if cal is None:
+        raise HTTPException(status_code=404, detail="Calibre book not found")
+
+    book = await _resolve_book_for_link(data, db)
+    isbn = (cal.get("identifiers") or {}).get("isbn")
+    calibre_link_service.upsert_link(
+        db,
+        calibre_book_id=book_id,
+        book_id=book.id,
+        source="manual",
+        confidence=None,
+        confirmed=True,
+        calibre_isbn=isbn,
+        calibre_title=cal.get("title"),
+    )
+
+    from app.services.hardcover_metadata import enrich_book_from_hardcover
+
+    try:
+        await enrich_book_from_hardcover(db, book)
+        if book.last_refreshed is None:
+            from datetime import datetime, timezone
+
+            book.last_refreshed = datetime.now(timezone.utc)
+        db.commit()
+    except Exception as exc:  # linking still succeeded
+        db.rollback()
+        logger.warning("calibre_manual_link_enrich_failed", book_id=book.id, error=str(exc))
+
+    return LinkResponse(
+        linked_book_id=book.id,
+        link_source="manual",
+        link_confirmed=True,
+        hardcover_id=book.hardcover_id,
+    )
+
+
+@router.delete("/books/{book_id}/link")
+async def clear_book_link(
+    book_id: int,
+    db: Session = Depends(get_db),
+    _: models.User = Depends(require_admin),
+):
+    removed = calibre_link_service.delete_link_for_calibre_id(db, book_id)
+    return {"removed": removed}
+
+
+@router.post("/books/{book_id}/refresh-metadata", response_model=LinkResponse)
+async def refresh_book_metadata(
+    book_id: int,
+    db: Session = Depends(get_db),
+    _: models.User = Depends(require_admin),
+):
+    """Re-fetch Hardcover metadata for the Book linked to this Calibre book."""
+    link = calibre_link_service.get_links_for_calibre_ids(db, [book_id]).get(book_id)
+    if link is None or link.book is None:
+        raise HTTPException(status_code=404, detail="This book is not linked yet")
+
+    from app.services.hardcover_metadata import enrich_book_from_hardcover
+    from datetime import datetime, timezone
+
+    book = link.book
+    try:
+        await enrich_book_from_hardcover(db, book, overwrite=True)
+        book.last_refreshed = datetime.now(timezone.utc)
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=502, detail=f"Hardcover refresh failed: {exc}")
+
+    return LinkResponse(
+        linked_book_id=book.id,
+        link_source=link.source,
+        link_confirmed=bool(link.confirmed),
+        hardcover_id=book.hardcover_id,
     )

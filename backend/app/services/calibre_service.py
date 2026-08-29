@@ -59,6 +59,48 @@ def _connect(library_path: str) -> sqlite3.Connection:
     return conn
 
 
+def existing_book_ids(library_path: str) -> set[int]:
+    """Return the set of all book ids currently in the library."""
+    conn = _connect(library_path)
+    try:
+        return {int(r[0]) for r in conn.execute("SELECT id FROM books").fetchall()}
+    finally:
+        conn.close()
+
+
+def book_identities(
+    library_path: str, ids: Optional[list[int]] = None
+) -> list[tuple[int, str, Optional[str], Optional[str]]]:
+    """Return (book_id, title, author, isbn) for the given ids (or the whole library)."""
+    conn = _connect(library_path)
+    try:
+        where = ""
+        params: list[Any] = []
+        if ids is not None:
+            if not ids:
+                return []
+            where = f"WHERE b.id IN ({','.join('?' * len(ids))})"
+            params = list(ids)
+        rows = conn.execute(
+            f"""
+            SELECT b.id AS id, b.title AS title, b.author_sort AS author_sort,
+                   (SELECT GROUP_CONCAT(a.name, ' & ')
+                      FROM books_authors_link bal JOIN authors a ON a.id = bal.author
+                     WHERE bal.book = b.id) AS authors,
+                   (SELECT val FROM identifiers
+                     WHERE book = b.id AND type IN ('isbn','isbn13','isbn10') LIMIT 1) AS isbn
+              FROM books b {where}
+            """,
+            params,
+        ).fetchall()
+        return [
+            (int(r["id"]), r["title"] or "", r["authors"] or r["author_sort"], r["isbn"])
+            for r in rows
+        ]
+    finally:
+        conn.close()
+
+
 def library_stats(library_path: str) -> dict[str, Any]:
     """Lightweight probe used by the Settings "Test connection" button."""
     conn = _connect(library_path)
