@@ -203,3 +203,58 @@ async def download_format(
         filename=download_name,
         content_disposition_type="attachment",
     )
+
+
+class EmailBookRequest(BaseModel):
+    format: str
+
+
+class EmailBookResponse(BaseModel):
+    success: bool
+    message: str
+    recipient: str
+
+
+@router.post("/books/{book_id}/email", response_model=EmailBookResponse)
+async def email_book_to_self(
+    book_id: int,
+    body: EmailBookRequest,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    """Email a book file from the Calibre library to the current user's delivery address."""
+    from app.services.email_service import send_book_email, EmailError
+
+    if not (current_user.book_delivery_email or "").strip():
+        raise HTTPException(
+            status_code=400,
+            detail="No delivery email address is set. Add one under Settings.",
+        )
+
+    library_path = _require_library(db)
+    result = calibre_service.format_file(library_path, book_id, body.format)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Format not available for this book")
+    path, download_name, media_type = result
+
+    book = calibre_service.get_book(library_path, book_id)
+    book_title = (book or {}).get("title") or download_name
+
+    try:
+        send_book_email(
+            db,
+            current_user,
+            file_path=path,
+            download_name=download_name,
+            media_type=media_type,
+            book_title=book_title,
+            book_format=body.format.upper(),
+        )
+    except EmailError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    return EmailBookResponse(
+        success=True,
+        message=f"Sent to {current_user.book_delivery_email}",
+        recipient=current_user.book_delivery_email,
+    )

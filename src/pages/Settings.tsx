@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Save, TestTube, CheckCircle, XCircle, Eye, EyeOff, Lock, Plus, Edit, Trash2, RefreshCw, Play, Clock, Database, Link, Shield, Loader2 } from 'lucide-react';
+import { Save, TestTube, CheckCircle, XCircle, Eye, EyeOff, Lock, Plus, Edit, Trash2, RefreshCw, Play, Clock, Database, Link, Shield, Loader2, Mail } from 'lucide-react';
 import ProwlarrSettings from '@/components/settings/ProwlarrSettings';
 import DownloadClientsSettings from '@/components/settings/DownloadClientsSettings';
 import DirectDownloadSettings from '@/components/settings/DirectDownloadSettings';
@@ -43,7 +43,7 @@ import {
 } from '@/components/ui/table';
 import { toast } from 'sonner';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { settingsApi, readarrApi, jobsApi, bookloreApi, audiobookshelfApi, downloadSettingsApi, type BookloreServer, type AudiobookshelfServer, type ProwlarrServer, type DownloadClient, type OidcSettingsResponse } from '@/lib/api';
+import { settingsApi, readarrApi, jobsApi, bookloreApi, audiobookshelfApi, downloadSettingsApi, usersApi, type BookloreServer, type AudiobookshelfServer, type ProwlarrServer, type DownloadClient, type OidcSettingsResponse } from '@/lib/api';
 import { usePageVisibility } from '@/hooks/usePageVisibility';
 
 interface ReadarrServer {
@@ -406,6 +406,276 @@ function OidcSettingsCard() {
   );
 }
 
+function EmailDeliveryCard() {
+  const { user, refetchUser } = useUser();
+  const [email, setEmail] = useState('');
+
+  useEffect(() => {
+    setEmail(user?.book_delivery_email || '');
+  }, [user?.book_delivery_email]);
+
+  const saveMutation = useMutation({
+    mutationFn: (value: string) => usersApi.updateMySettings({ book_delivery_email: value }),
+    onSuccess: () => {
+      toast.success('Delivery email saved');
+      refetchUser();
+    },
+    onError: (err: Error) => {
+      toast.error('Failed to save delivery email', { description: err.message });
+    },
+  });
+
+  const current = user?.book_delivery_email || '';
+
+  return (
+    <Card className="bg-card border-border">
+      <CardHeader>
+        <div className="flex items-center gap-3">
+          <Mail className="h-5 w-5 text-muted-foreground" />
+          <div>
+            <CardTitle className="text-foreground">Send Books to Yourself</CardTitle>
+            <CardDescription>
+              The address a downloaded book is emailed to when you choose "Email to myself" from My Books.
+            </CardDescription>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="space-y-2">
+          <Label htmlFor="delivery-email" className="text-foreground">Recipient email address</Label>
+          <Input
+            id="delivery-email"
+            type="email"
+            placeholder="you@example.com"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            className="bg-secondary border-border"
+          />
+          <p className="text-xs text-muted-foreground">
+            Leave blank to disable emailing books to yourself.
+          </p>
+        </div>
+        <div className="flex justify-end">
+          <Button
+            size="sm"
+            onClick={() => saveMutation.mutate(email.trim())}
+            disabled={saveMutation.isPending || email.trim() === current}
+          >
+            <Save className="h-4 w-4 mr-2" />
+            {saveMutation.isPending ? 'Saving...' : 'Save'}
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function SmtpSettingsCard() {
+  const queryClient = useQueryClient();
+  const [showPassword, setShowPassword] = useState(false);
+  const [form, setForm] = useState({
+    smtp_host: '',
+    smtp_port: '',
+    smtp_encryption: 'starttls',
+    smtp_username: '',
+    smtp_from_address: '',
+    smtp_password: '',
+  });
+
+  const { data: smtp, isLoading } = useQuery({
+    queryKey: ['smtp-settings'],
+    queryFn: () => settingsApi.getSmtpSettings(),
+  });
+
+  useEffect(() => {
+    if (smtp) {
+      setForm({
+        smtp_host: smtp.smtp_host || '',
+        smtp_port: smtp.smtp_port != null ? String(smtp.smtp_port) : '',
+        smtp_encryption: smtp.smtp_encryption || 'starttls',
+        smtp_username: smtp.smtp_username || '',
+        smtp_from_address: smtp.smtp_from_address || '',
+        smtp_password: '',
+      });
+    }
+  }, [smtp]);
+
+  const saveMutation = useMutation({
+    mutationFn: () =>
+      settingsApi.updateSmtpSettings({
+        smtp_host: form.smtp_host.trim(),
+        smtp_port: form.smtp_port ? Number(form.smtp_port) : undefined,
+        smtp_encryption: form.smtp_encryption,
+        smtp_username: form.smtp_username.trim(),
+        smtp_from_address: form.smtp_from_address.trim(),
+        smtp_password: form.smtp_password || undefined,
+      }),
+    onSuccess: () => {
+      toast.success('SMTP settings saved');
+      setForm((p) => ({ ...p, smtp_password: '' }));
+      queryClient.invalidateQueries({ queryKey: ['smtp-settings'] });
+    },
+    onError: (err: Error) => {
+      toast.error('Failed to save SMTP settings', { description: err.message });
+    },
+  });
+
+  const testMutation = useMutation({
+    mutationFn: () => settingsApi.testSmtpSettings(),
+    onSuccess: (data) => {
+      toast.success('SMTP test succeeded', { description: data.message });
+    },
+    onError: (err: Error) => {
+      toast.error('SMTP test failed', { description: err.message });
+    },
+  });
+
+  if (isLoading) {
+    return (
+      <Card className="bg-card border-border">
+        <CardContent className="flex items-center justify-center py-8">
+          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <Card className="bg-card border-border">
+      <CardHeader>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <Mail className="h-5 w-5 text-muted-foreground" />
+            <div>
+              <CardTitle className="text-foreground">SMTP Email Server</CardTitle>
+              <CardDescription>
+                Outgoing mail server used to send book files to users.
+              </CardDescription>
+            </div>
+          </div>
+          <Badge variant={smtp?.configured ? 'default' : 'secondary'}>
+            {smtp?.configured ? 'Configured' : 'Not configured'}
+          </Badge>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="space-y-2">
+            <Label htmlFor="smtp-host" className="text-foreground">Host</Label>
+            <Input
+              id="smtp-host"
+              placeholder="smtp.example.com"
+              value={form.smtp_host}
+              onChange={(e) => setForm((p) => ({ ...p, smtp_host: e.target.value }))}
+              className="bg-secondary border-border"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="smtp-port" className="text-foreground">Port</Label>
+            <Input
+              id="smtp-port"
+              type="number"
+              placeholder="587"
+              value={form.smtp_port}
+              onChange={(e) => setForm((p) => ({ ...p, smtp_port: e.target.value }))}
+              className="bg-secondary border-border"
+            />
+          </div>
+        </div>
+
+        <div className="space-y-2">
+          <Label htmlFor="smtp-encryption" className="text-foreground">Encryption</Label>
+          <Select
+            value={form.smtp_encryption}
+            onValueChange={(value) => setForm((p) => ({ ...p, smtp_encryption: value }))}
+          >
+            <SelectTrigger id="smtp-encryption" className="bg-secondary border-border">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="starttls">STARTTLS (usually port 587)</SelectItem>
+              <SelectItem value="ssl">SSL/TLS (usually port 465)</SelectItem>
+              <SelectItem value="none">None (not recommended)</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="space-y-2">
+            <Label htmlFor="smtp-username" className="text-foreground">SMTP login</Label>
+            <Input
+              id="smtp-username"
+              placeholder="Username for the SMTP server"
+              value={form.smtp_username}
+              onChange={(e) => setForm((p) => ({ ...p, smtp_username: e.target.value }))}
+              className="bg-secondary border-border"
+              autoComplete="off"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="smtp-password" className="text-foreground">SMTP password</Label>
+            <div className="relative">
+              <Input
+                id="smtp-password"
+                type={showPassword ? 'text' : 'password'}
+                placeholder={smtp?.smtp_password_set ? '(unchanged)' : 'Password'}
+                value={form.smtp_password}
+                onChange={(e) => setForm((p) => ({ ...p, smtp_password: e.target.value }))}
+                className="bg-secondary border-border pr-10"
+                autoComplete="new-password"
+              />
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="absolute right-0 top-0 h-full px-3 py-2 hover:bg-transparent"
+                onClick={() => setShowPassword(!showPassword)}
+              >
+                {showPassword ? <EyeOff className="h-4 w-4 text-muted-foreground" /> : <Eye className="h-4 w-4 text-muted-foreground" />}
+              </Button>
+            </div>
+          </div>
+        </div>
+
+        <div className="space-y-2">
+          <Label htmlFor="smtp-from" className="text-foreground">Sender address</Label>
+          <Input
+            id="smtp-from"
+            type="email"
+            placeholder="bookkeep@example.com"
+            value={form.smtp_from_address}
+            onChange={(e) => setForm((p) => ({ ...p, smtp_from_address: e.target.value }))}
+            className="bg-secondary border-border"
+          />
+          <p className="text-xs text-muted-foreground">
+            The "From" address on emails. Defaults to the SMTP login if left blank.
+          </p>
+        </div>
+
+        <div className="flex justify-between pt-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => testMutation.mutate()}
+            disabled={testMutation.isPending || !smtp?.configured}
+          >
+            {testMutation.isPending ? (
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+            ) : (
+              <TestTube className="h-4 w-4 mr-2" />
+            )}
+            Send Test Email
+          </Button>
+          <Button size="sm" onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending}>
+            <Save className="h-4 w-4 mr-2" />
+            {saveMutation.isPending ? 'Saving...' : 'Save SMTP Settings'}
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function Settings() {
   const { isAdmin } = useUser();
   const isVisible = usePageVisibility();
@@ -490,23 +760,27 @@ export default function Settings() {
   const { data: tokenStatus } = useQuery({
     queryKey: ['hardcover-token-status'],
     queryFn: () => settingsApi.getHardcoverToken(),
+    enabled: isAdmin,
   });
 
   // Fetch download paths
   const { data: downloadPaths } = useQuery({
     queryKey: ['download-paths'],
     queryFn: () => settingsApi.getDownloadPaths(),
+    enabled: isAdmin,
   });
 
   // Fetch Readarr servers
   const { data: servers = [], refetch: refetchServers } = useQuery({
     queryKey: ['readarr-servers'],
     queryFn: () => readarrApi.getAll(),
+    enabled: isAdmin,
   });
 
   // Fetch Jobs
   const { data: jobs = [], isLoading: jobsLoading, error: jobsError, refetch: refetchJobs } = useQuery<Job[], Error>({
     queryKey: ['jobs'],
+    enabled: isAdmin,
     queryFn: async () => {
       try {
         const result = await jobsApi.getAll();
@@ -528,18 +802,21 @@ export default function Settings() {
   const { data: bookloreServers = [], refetch: refetchBookloreServers } = useQuery({
     queryKey: ['booklore-servers'],
     queryFn: () => bookloreApi.getAll(),
+    enabled: isAdmin,
   });
 
   // Fetch Audiobookshelf servers
   const { data: audiobookshelfServers = [], refetch: refetchAudiobookshelfServers } = useQuery({
     queryKey: ['audiobookshelf-servers'],
     queryFn: () => audiobookshelfApi.getAll(),
+    enabled: isAdmin,
   });
 
   // Fetch job interval options
   const { data: intervalOptions = [] } = useQuery<IntervalOption[], Error>({
     queryKey: ['job-intervals'],
     queryFn: () => jobsApi.getIntervals(),
+    enabled: isAdmin,
   });
 
   // Fetch cache resources (admin only)
@@ -1233,13 +1510,26 @@ export default function Settings() {
       </div>
 
       <Tabs defaultValue="general" className="w-full">
-        <TabsList className="grid w-full grid-cols-3">
+        <TabsList className={`grid w-full ${isAdmin ? 'grid-cols-3' : 'grid-cols-1'}`}>
           <TabsTrigger value="general">General</TabsTrigger>
-          <TabsTrigger value="services">Services</TabsTrigger>
-          <TabsTrigger value="jobs">Jobs & Cache</TabsTrigger>
+          {isAdmin && <TabsTrigger value="services">Services</TabsTrigger>}
+          {isAdmin && <TabsTrigger value="jobs">Jobs & Cache</TabsTrigger>}
         </TabsList>
 
         <TabsContent value="general" className="space-y-6 mt-6">
+          {/* Personal book delivery address (all users) */}
+          <EmailDeliveryCard />
+
+          {!isAdmin && (
+            <p className="text-sm text-muted-foreground">
+              Additional integration settings are managed by an administrator.
+            </p>
+          )}
+
+          {isAdmin && <SmtpSettingsCard />}
+
+          {isAdmin && (
+          <>
           {/* Hardcover Settings */}
           <Card className="bg-card border-border">
         <CardHeader>
@@ -1395,6 +1685,8 @@ export default function Settings() {
 
           {/* OIDC / SSO Settings */}
           <OidcSettingsCard />
+          </>
+          )}
         </TabsContent>
 
         <TabsContent value="services" className="space-y-6 mt-6">

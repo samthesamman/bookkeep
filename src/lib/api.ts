@@ -439,6 +439,7 @@ export interface ApiUser {
   can_download: boolean;
   auto_approve_ebooks: boolean;
   auto_approve_audiobooks: boolean;
+  book_delivery_email?: string | null;
   created_at: string;
   updated_at?: string;
 }
@@ -519,6 +520,12 @@ export const usersApi = {
     apiRequest<{ message: string }>('/api/users/me/password', {
       method: 'PUT',
       body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+    }),
+
+  updateMySettings: (data: { book_delivery_email?: string }) =>
+    apiRequest<ApiUser>('/api/users/me/settings', {
+      method: 'PUT',
+      body: JSON.stringify(data),
     }),
 
   create: (user: { email: string; username: string; password: string; full_name?: string; is_admin?: boolean }) =>
@@ -612,6 +619,53 @@ export const settingsApi = {
     apiRequest<{ status: string; issuer: string; authorization_endpoint: string; token_endpoint: string; userinfo_endpoint: string }>('/api/settings/oidc/test', {
       method: 'POST',
     }),
+
+  getSmtpSettings: () =>
+    apiRequest<SmtpSettingsResponse>('/api/settings/smtp'),
+
+  updateSmtpSettings: (data: {
+    smtp_host?: string;
+    smtp_port?: number;
+    smtp_encryption?: string;
+    smtp_username?: string;
+    smtp_from_address?: string;
+    smtp_password?: string;
+  }) =>
+    apiRequest<SmtpSettingsResponse>('/api/settings/smtp', {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+
+  testSmtpSettings: (recipient?: string) =>
+    apiRequest<{ message: string }>('/api/settings/smtp/test', {
+      method: 'POST',
+      body: JSON.stringify({ recipient: recipient || null }),
+    }),
+};
+
+export interface SmtpSettingsResponse {
+  smtp_host: string | null;
+  smtp_port: number | null;
+  smtp_encryption: string;
+  smtp_username: string | null;
+  smtp_from_address: string | null;
+  smtp_password_set: boolean;
+  configured: boolean;
+}
+
+export interface EmailLog {
+  id: number;
+  recipient: string;
+  subject: string | null;
+  book_title: string | null;
+  book_format: string | null;
+  status: string;
+  error_message: string | null;
+  created_at: string | null;
+}
+
+export const emailsApi = {
+  getAll: () => apiRequest<EmailLog[]>('/api/emails/'),
 };
 
 // Readarr API endpoints
@@ -1302,4 +1356,10 @@ export const calibreApi = {
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   },
+
+  emailBook: (id: number, format: string) =>
+    apiRequest<{ success: boolean; message: string; recipient: string }>(
+      `/api/calibre/books/${id}/email`,
+      { method: 'POST', body: JSON.stringify({ format }) },
+    ),
 };

@@ -326,6 +326,106 @@ async def test_oidc_connection(
         )
 
 
+# SMTP / Email Settings (Admin only)
+
+SMTP_ENCRYPTION_CHOICES = {"none", "ssl", "starttls"}
+
+
+class SmtpSettingsResponse(BaseModel):
+    smtp_host: Optional[str] = None
+    smtp_port: Optional[int] = None
+    smtp_encryption: str = "starttls"
+    smtp_username: Optional[str] = None
+    smtp_from_address: Optional[str] = None
+    smtp_password_set: bool = False
+    configured: bool = False
+
+
+class SmtpSettingsUpdate(BaseModel):
+    smtp_host: Optional[str] = None
+    smtp_port: Optional[int] = None
+    smtp_encryption: Optional[str] = None
+    smtp_username: Optional[str] = None
+    smtp_from_address: Optional[str] = None
+    smtp_password: Optional[str] = None  # None/empty = keep existing
+
+
+class SmtpTestRequest(BaseModel):
+    recipient: Optional[str] = None
+
+
+@router.get("/smtp", response_model=SmtpSettingsResponse)
+async def get_smtp_settings(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(require_admin),
+):
+    """Get SMTP email settings (admin only). The password is never returned."""
+    from app.services.email_service import get_smtp_config
+
+    config = get_smtp_config(db)
+    port_raw = get_setting_value(db, "smtp_port")
+    return SmtpSettingsResponse(
+        smtp_host=get_setting_value(db, "smtp_host") or None,
+        smtp_port=int(port_raw) if port_raw and port_raw.isdigit() else None,
+        smtp_encryption=(get_setting_value(db, "smtp_encryption") or "starttls").lower(),
+        smtp_username=get_setting_value(db, "smtp_username") or None,
+        smtp_from_address=get_setting_value(db, "smtp_from_address") or None,
+        smtp_password_set=bool(config.password),
+        configured=config.configured,
+    )
+
+
+@router.put("/smtp", response_model=SmtpSettingsResponse)
+async def update_smtp_settings(
+    update: SmtpSettingsUpdate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(require_admin),
+):
+    """Update SMTP email settings (admin only)."""
+    if update.smtp_encryption is not None:
+        if update.smtp_encryption.lower() not in SMTP_ENCRYPTION_CHOICES:
+            raise HTTPException(
+                status_code=400,
+                detail="smtp_encryption must be one of: none, ssl, starttls",
+            )
+        set_setting_value(db, "smtp_encryption", update.smtp_encryption.lower())
+
+    if update.smtp_host is not None:
+        set_setting_value(db, "smtp_host", update.smtp_host.strip())
+
+    if update.smtp_port is not None:
+        set_setting_value(db, "smtp_port", str(update.smtp_port))
+
+    if update.smtp_username is not None:
+        set_setting_value(db, "smtp_username", update.smtp_username.strip())
+
+    if update.smtp_from_address is not None:
+        set_setting_value(db, "smtp_from_address", update.smtp_from_address.strip())
+
+    # Only overwrite the password when a non-empty value is supplied.
+    if update.smtp_password:
+        set_setting_value(db, "smtp_password", update.smtp_password)
+
+    return await get_smtp_settings(db=db, current_user=current_user)
+
+
+@router.post("/smtp/test")
+async def test_smtp_settings(
+    body: SmtpTestRequest,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(require_admin),
+):
+    """Send a test email to verify the SMTP configuration (admin only)."""
+    from app.services.email_service import send_test_email, EmailError
+
+    recipient = (body.recipient or current_user.book_delivery_email or current_user.email or "").strip()
+    try:
+        send_test_email(db, recipient)
+    except EmailError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"message": f"Test email sent to {recipient}"}
+
+
 # Cache Management (Admin only)
 
 class CacheResourceInfo(BaseModel):

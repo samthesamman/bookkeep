@@ -80,6 +80,39 @@ async def change_password(
     return {"message": "Password changed successfully"}
 
 
+class MeSettingsUpdate(schemas.BaseModel):
+    # Empty string clears the address; None leaves it unchanged.
+    book_delivery_email: Optional[str] = None
+
+
+class _EmailCheck(schemas.BaseModel):
+    email: schemas.EmailStr
+
+
+@router.put("/me/settings", response_model=schemas.UserResponse)
+async def update_my_settings(
+    request: MeSettingsUpdate,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    """Update the current user's personal preferences."""
+    if request.book_delivery_email is not None:
+        value = request.book_delivery_email.strip()
+        if value:
+            try:
+                _EmailCheck(email=value)
+            except Exception:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Invalid email address",
+                )
+        current_user.book_delivery_email = value or None
+
+    db.commit()
+    db.refresh(current_user)
+    return current_user
+
+
 @router.get("/check/admin-exists", response_model=dict)
 def check_admin_exists(db: Session = Depends(database.get_db)):
     """Check if any admin users exist (public endpoint for initial setup)"""

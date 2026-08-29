@@ -20,6 +20,8 @@ class User(Base):
     can_download = Column(Boolean, default=True)
     auto_approve_ebooks = Column(Boolean, default=True)
     auto_approve_audiobooks = Column(Boolean, default=True)
+    # Address used when the user emails a downloaded book to themselves
+    book_delivery_email = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     
@@ -357,6 +359,23 @@ class DirectDownloadSettings(Base):
     # Metadata
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+
+class EmailLog(Base):
+    """History of book files emailed to users (see services.email_service)."""
+    __tablename__ = "email_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    recipient = Column(String, nullable=False)
+    subject = Column(String, nullable=True)
+    book_title = Column(String, nullable=True)
+    book_format = Column(String, nullable=True)
+    status = Column(String, nullable=False, default="success")  # "success" or "error"
+    error_message = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    user = relationship("User")
 
 
 class CalibreSettings(Base):

@@ -26,6 +26,7 @@ const Admin = lazy(() => import("@/pages/Admin"));
 const Users = lazy(() => import("@/pages/Users"));
 const Settings = lazy(() => import("@/pages/Settings"));
 const Profile = lazy(() => import("@/pages/Profile"));
+const Tasks = lazy(() => import("@/pages/Tasks"));
 const Series = lazy(() => import("@/pages/Series"));
 const SeriesDetail = lazy(() => import("@/pages/SeriesDetail"));
 const SearchResults = lazy(() => import("@/pages/SearchResults"));
@@ -79,10 +80,11 @@ const App = () => (
                     <Route path="/prompt/:slug" element={<PromptDetail />} />
                     <Route path="/author" element={<Author />} />
                     <Route path="/profile" element={<Profile />} />
+                    <Route path="/tasks" element={<Tasks />} />
+                    <Route path="/settings" element={<Settings />} />
                     <Route element={<AdminRouteGuard />}>
                       <Route path="/admin" element={<Admin />} />
                       <Route path="/admin/users" element={<Users />} />
-                      <Route path="/settings" element={<Settings />} />
                     </Route>
                   </Route>
                 </Route>

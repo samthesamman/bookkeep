@@ -9,7 +9,7 @@ import sys
 import os
 
 from app.database import engine, Base
-from app.routers import users, books, hardcover, requests, settings, readarr, jobs, booklore, audiobookshelf, auth, download_settings, downloads, direct_downloads, oidc, hardcover_sync, calibre
+from app.routers import users, books, hardcover, requests, settings, readarr, jobs, booklore, audiobookshelf, auth, download_settings, downloads, direct_downloads, oidc, hardcover_sync, calibre, emails
 from app.auth import get_current_user
 from app import cache
 
@@ -137,6 +137,7 @@ app.include_router(auth.router)  # No prefix, it's already in the router
 app.include_router(oidc.router)  # No prefix, it's already in the router
 app.include_router(hardcover_sync.router, prefix="/api/hardcover-sync", tags=["hardcover-sync"])
 app.include_router(calibre.router, prefix="/api/calibre", tags=["calibre"])
+app.include_router(emails.router, prefix="/api/emails", tags=["emails"])
 
 enable_debug_routes = os.getenv("bookkeep_DEBUG_ROUTES", "").lower() in {"1", "true", "yes"}
 if enable_debug_routes:

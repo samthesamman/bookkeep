@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Search, User, Settings, Clock, LogOut, Menu, ChevronDown } from 'lucide-react';
+import { Search, User, Settings, Clock, LogOut, Menu, ChevronDown, ListChecks } from 'lucide-react';
 import { useNavigate, Link } from 'react-router-dom';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -51,7 +51,7 @@ export function Header({ onMenuClick }: HeaderProps) {
   const [showResults, setShowResults] = useState(false);
   const [isSearchFocused, setIsSearchFocused] = useState(false);
   const navigate = useNavigate();
-  const { user, isAdmin, logout } = useUser();
+  const { user, logout } = useUser();
 
   useEffect(() => {
     const trimmed = searchQuery.trim();
@@ -208,16 +208,22 @@ export function Header({ onMenuClick }: HeaderProps) {
                 <span className="font-medium">Requests</span>
               </Link>
             </DropdownMenuItem>
-            {isAdmin && (
-              <DropdownMenuItem asChild className="rounded-lg focus:bg-primary/10 cursor-pointer">
-                <Link to="/settings" className="flex items-center gap-3 px-3 py-2.5">
-                  <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-muted/50">
-                    <Settings className="h-4 w-4" />
-                  </div>
-                  <span className="font-medium">Settings</span>
-                </Link>
-              </DropdownMenuItem>
-            )}
+            <DropdownMenuItem asChild className="rounded-lg focus:bg-primary/10 cursor-pointer">
+              <Link to="/tasks" className="flex items-center gap-3 px-3 py-2.5">
+                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-muted/50">
+                  <ListChecks className="h-4 w-4" />
+                </div>
+                <span className="font-medium">Tasks</span>
+              </Link>
+            </DropdownMenuItem>
+            <DropdownMenuItem asChild className="rounded-lg focus:bg-primary/10 cursor-pointer">
+              <Link to="/settings" className="flex items-center gap-3 px-3 py-2.5">
+                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-muted/50">
+                  <Settings className="h-4 w-4" />
+                </div>
+                <span className="font-medium">Settings</span>
+              </Link>
+            </DropdownMenuItem>
             <DropdownMenuSeparator className="my-2 bg-border/50" />
             <DropdownMenuItem
               onClick={logout}

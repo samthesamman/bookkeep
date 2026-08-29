@@ -27,6 +27,7 @@ class UserResponse(UserBase):
     can_download: Optional[bool] = True
     auto_approve_ebooks: Optional[bool] = True
     auto_approve_audiobooks: Optional[bool] = True
+    book_delivery_email: Optional[str] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
 

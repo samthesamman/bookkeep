@@ -11,7 +11,7 @@ logger = structlog.get_logger(__name__)
 
 ENCRYPTED_PREFIX = "enc:"
 
-SENSITIVE_KEYS = {"oidc_client_secret", "hardcover_api_token"}
+SENSITIVE_KEYS = {"oidc_client_secret", "hardcover_api_token", "smtp_password"}
 
 _SALT = b"bookkeep-settings-encryption-v1"
 
