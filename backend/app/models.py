@@ -216,6 +216,8 @@ class DownloadClient(Base):
     category = Column(String, nullable=True)  # Legacy: default category
     ebook_category = Column(String, nullable=True)  # Category for ebooks
     audiobook_category = Column(String, nullable=True)  # Category for audiobooks
+    ebook_download_path = Column(String, nullable=True)  # Optional save path for ebook torrents
+    audiobook_download_path = Column(String, nullable=True)  # Optional save path for audiobook torrents
 
     # Path mappings (JSON array of {remote, local} objects for Docker)
     path_mappings_json = Column(Text, nullable=True)

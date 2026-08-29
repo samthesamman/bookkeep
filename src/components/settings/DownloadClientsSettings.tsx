@@ -40,6 +40,8 @@ interface DownloadClientForm {
   category: string;
   ebook_category: string;
   audiobook_category: string;
+  ebook_download_path: string;
+  audiobook_download_path: string;
 }
 
 export default function DownloadClientsSettings() {
@@ -65,6 +67,8 @@ export default function DownloadClientsSettings() {
     category: 'books',
     ebook_category: 'books-ebook',
     audiobook_category: 'books-audiobook',
+    ebook_download_path: '',
+    audiobook_download_path: '',
   });
 
   const queryClient = useQueryClient();
@@ -156,6 +160,8 @@ export default function DownloadClientsSettings() {
       category: client.category || 'books',
       ebook_category: client.ebook_category || 'books-ebook',
       audiobook_category: client.audiobook_category || 'books-audiobook',
+      ebook_download_path: client.ebook_download_path || '',
+      audiobook_download_path: client.audiobook_download_path || '',
     });
     setShowModal(true);
   };
@@ -526,6 +532,39 @@ export default function DownloadClientsSettings() {
                 />
               </div>
             </div>
+
+            {/* Format-specific download paths: torrent clients only */}
+            {form.protocol === 'torrent' && (
+              <div className="space-y-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="ebook-download-path" className="text-foreground">Ebook Download Path</Label>
+                    <Input
+                      id="ebook-download-path"
+                      value={form.ebook_download_path}
+                      onChange={(e) => setForm({ ...form, ebook_download_path: e.target.value })}
+                      placeholder="/downloads/books-ebook"
+                      className="bg-secondary border-border"
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="audiobook-download-path" className="text-foreground">Audiobook Download Path</Label>
+                    <Input
+                      id="audiobook-download-path"
+                      value={form.audiobook_download_path}
+                      onChange={(e) => setForm({ ...form, audiobook_download_path: e.target.value })}
+                      placeholder="/downloads/books-audiobook"
+                      className="bg-secondary border-border"
+                    />
+                  </div>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Optional. When set, torrents are added with this save path based on the download format.
+                  Leave blank to use the torrent client's default.
+                </p>
+              </div>
+            )}
 
             <div className="flex items-center space-x-2">
               <Checkbox

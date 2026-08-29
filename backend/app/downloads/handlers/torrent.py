@@ -116,6 +116,8 @@ class TorrentHandler(DownloadHandler):
                         category=client_config.category,
                         ebook_category=client_config.ebook_category,
                         audiobook_category=client_config.audiobook_category,
+                        ebook_download_path=client_config.ebook_download_path,
+                        audiobook_download_path=client_config.audiobook_download_path,
                         path_mappings=path_mappings,
                     )
 
@@ -218,13 +220,17 @@ class TorrentHandler(DownloadHandler):
                 # This respects the user's format-specific qBittorrent category configuration
                 category = client.get_category_for_format(task.format)
 
+                # Select an optional save path based on format (ebook/audiobook).
+                # Falls back to the client's own default when not configured.
+                save_path = client.get_download_path_for_format(task.format)
+
                 # Add torrent with static tag to identify Bookkeep downloads
                 unique_tag = "bookkeep"
 
                 if task.download_url.startswith("magnet:"):
-                    info_hash = client.add_torrent(magnet=task.download_url, category=category, tags=[unique_tag])
+                    info_hash = client.add_torrent(magnet=task.download_url, save_path=save_path, category=category, tags=[unique_tag])
                 else:
-                    info_hash = client.add_torrent(url=task.download_url, category=category, tags=[unique_tag])
+                    info_hash = client.add_torrent(url=task.download_url, save_path=save_path, category=category, tags=[unique_tag])
 
                 if not info_hash:
                     logger.error(

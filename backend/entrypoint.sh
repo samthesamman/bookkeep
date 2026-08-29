@@ -12,6 +12,16 @@ fi
 # Set PYTHONPATH - Alembic needs to import app.* modules
 export PYTHONPATH="/app/backend:$PYTHONPATH"
 
+# Create tables first (SQLAlchemy will create all tables with current schema)
+# Then migrations will add any missing columns (idempotent)
+cd /app
+echo "Creating database tables if they don't exist..."
+# NOTE: app.models MUST be imported so every model registers on Base.metadata.
+# Importing only app.database leaves Base.metadata empty and create_all() is a
+# no-op, which is why fresh databases ended up with no 'books' table and the
+# unguarded migrations (005+) then failed with "relation books does not exist".
+python -c "from app.database import engine, Base; import app.models; Base.metadata.create_all(bind=engine); print('Tables created/verified')"
+
 echo "Running database migrations..."
 echo "DATABASE_URL: $DATABASE_URL"
 
@@ -22,11 +32,33 @@ echo "Checking Alembic version..."
 ALEMBIC_CURRENT=$(python -m alembic -c alembic.ini current 2>&1)
 echo "Alembic current: $ALEMBIC_CURRENT"
 
-# If there is no alembic_version table the command prints nothing or errors.
-# This happens when the DB was bootstrapped via SQLAlchemy create_all without
-# Alembic ever having run (legacy deployments).  We detect this and stamp the
-# database at the correct revision so Alembic only runs the truly new migrations.
-if ! echo "$ALEMBIC_CURRENT" | grep -q "(head)\|Rev:"; then
+# Determine whether the database is already tracked by Alembic by inspecting the
+# alembic_version table directly.  We must NOT infer this from `alembic current`
+# output: a validly-tracked DB that is simply *behind* head (the normal state
+# right after a new migration is added) prints only the bare revision with no
+# "(head)" / "Rev:" marker, which previously caused a false "untracked" result
+# and a stamp-to-head that silently skipped the pending migration.
+ALEMBIC_TRACKED=$(python -c "
+import os
+from sqlalchemy import inspect, create_engine
+engine = create_engine(os.environ['DATABASE_URL'])
+try:
+    if inspect(engine).has_table('alembic_version'):
+        with engine.connect() as conn:
+            row = conn.exec_driver_sql('SELECT version_num FROM alembic_version').fetchone()
+        print('yes' if row and row[0] else 'no')
+    else:
+        print('no')
+except Exception:
+    print('no')
+" 2>/dev/null || echo "no")
+echo "Alembic tracked: $ALEMBIC_TRACKED"
+
+# If there is no alembic_version table the DB was bootstrapped via SQLAlchemy
+# create_all without Alembic ever having run (legacy deployments).  We detect
+# this and stamp the database at the correct revision so Alembic only runs the
+# truly new migrations.
+if [ "$ALEMBIC_TRACKED" != "yes" ]; then
     echo "No Alembic version found. Checking whether the database already has tables..."
 
     TABLES_EXIST=$(python -c "
@@ -41,6 +73,7 @@ except Exception:
 " 2>/dev/null || echo "no")
 
     echo "Existing tables found: $TABLES_EXIST"
+
 
     if [ "$TABLES_EXIST" = "yes" ]; then
         # The database has data but was never tracked by Alembic.

@@ -165,6 +165,8 @@ class QBittorrentClient:
         category: Optional[str] = None,
         ebook_category: Optional[str] = None,
         audiobook_category: Optional[str] = None,
+        ebook_download_path: Optional[str] = None,
+        audiobook_download_path: Optional[str] = None,
         path_mappings: Optional[Dict[str, str]] = None,
     ):
         """
@@ -180,6 +182,8 @@ class QBittorrentClient:
             category: Default/fallback category for downloads
             ebook_category: Category for ebook downloads (falls back to category)
             audiobook_category: Category for audiobook downloads (falls back to category)
+            ebook_download_path: Optional save path for ebook downloads
+            audiobook_download_path: Optional save path for audiobook downloads
             path_mappings: Docker path mappings {"container_path": "host_path"}
         """
         if not HAS_QBITTORRENT:
@@ -197,11 +201,29 @@ class QBittorrentClient:
         self.category = category
         self.ebook_category = ebook_category
         self.audiobook_category = audiobook_category
+        self.ebook_download_path = ebook_download_path
+        self.audiobook_download_path = audiobook_download_path
         self.path_mappings = path_mappings or {}
 
         # Initialize client
         self.client: Optional[QBClient] = None
         self._connect()
+
+    def get_download_path_for_format(self, format_type: Optional[str] = None) -> Optional[str]:
+        """
+        Get the configured save path for the given download format.
+
+        Args:
+            format_type: "ebook", "audiobook", or None
+
+        Returns:
+            The format-specific save path, or None to use the client's default
+        """
+        if format_type == "ebook" and self.ebook_download_path:
+            return self.ebook_download_path
+        elif format_type == "audiobook" and self.audiobook_download_path:
+            return self.audiobook_download_path
+        return None
 
     def get_category_for_format(self, format_type: Optional[str] = None) -> Optional[str]:
         """

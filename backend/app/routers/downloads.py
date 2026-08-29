@@ -84,6 +84,10 @@ def get_download_path(db: Session, format_type: str) -> Optional[str]:
     # Check environment variable
     import os
     env_key = key.upper()
+    logger.info(
+        "download path",
+        os.getenv(env_key)
+        )
     return os.getenv(env_key)
 
 

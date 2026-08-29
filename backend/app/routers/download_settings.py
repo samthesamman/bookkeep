@@ -86,6 +86,8 @@ class DownloadClientCreate(BaseModel):
     category: Optional[str] = None
     ebook_category: Optional[str] = None
     audiobook_category: Optional[str] = None
+    ebook_download_path: Optional[str] = None
+    audiobook_download_path: Optional[str] = None
     path_mappings_json: Optional[str] = None
 
 
@@ -105,6 +107,8 @@ class DownloadClientUpdate(BaseModel):
     category: Optional[str] = None
     ebook_category: Optional[str] = None
     audiobook_category: Optional[str] = None
+    ebook_download_path: Optional[str] = None
+    audiobook_download_path: Optional[str] = None
     path_mappings_json: Optional[str] = None
 
 
@@ -125,6 +129,8 @@ class DownloadClientResponse(BaseModel):
     category: Optional[str]
     ebook_category: Optional[str]
     audiobook_category: Optional[str]
+    ebook_download_path: Optional[str] = None
+    audiobook_download_path: Optional[str] = None
     path_mappings_json: Optional[str]
 
     class Config:
