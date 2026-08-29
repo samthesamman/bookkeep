@@ -14,6 +14,7 @@ CREATE TABLE books (id INTEGER PRIMARY KEY, title TEXT, sort TEXT, timestamp TEX
 CREATE TABLE authors (id INTEGER PRIMARY KEY, name TEXT, sort TEXT);
 CREATE TABLE books_authors_link (id INTEGER PRIMARY KEY, book INTEGER, author INTEGER);
 CREATE TABLE identifiers (id INTEGER PRIMARY KEY, book INTEGER, type TEXT, val TEXT);
+CREATE TABLE data (id INTEGER PRIMARY KEY, book INTEGER, format TEXT, uncompressed_size INTEGER, name TEXT);
 """
 
 _DATA = """
@@ -22,6 +23,9 @@ INSERT INTO books VALUES (20,'Dune','Dune','2025-06-01','1965',1.0,'Herbert, Fra
 INSERT INTO authors VALUES (1,'J.R.R. Tolkien','Tolkien'),(2,'Frank Herbert','Herbert');
 INSERT INTO books_authors_link VALUES (1,10,1),(2,20,2);
 INSERT INTO identifiers VALUES (1,20,'isbn','9780441013593');
+INSERT INTO data VALUES (1,10,'EPUB',1,'hobbit');
+INSERT INTO data VALUES (2,20,'EPUB',1,'dune');
+INSERT INTO data VALUES (3,20,'MP3',1,'dune-audio');
 """
 
 
@@ -122,6 +126,22 @@ def test_heal_repoints_by_isbn(db, library):
     )
     cls.heal_stale_links(db, library)
     assert db.query(CalibreBookLink).one().calibre_book_id == 20
+
+
+def test_sync_availability_flags(db, library):
+    b1 = _book(db, title="The Hobbit", author="Tolkien")
+    b2 = _book(db, title="Dune", author="Frank Herbert")
+    cls.upsert_link(db, calibre_book_id=10, book_id=b1.id, source="fuzzy")
+    cls.upsert_link(db, calibre_book_id=20, book_id=b2.id, source="fuzzy")
+
+    changed = cls.sync_availability_flags(db, library)
+    assert changed == 3  # b1 ebook; b2 ebook + audiobook
+    db.refresh(b1)
+    db.refresh(b2)
+    assert b1.ebook_available and not b1.audiobook_available
+    assert b2.ebook_available and b2.audiobook_available
+    # Idempotent.
+    assert cls.sync_availability_flags(db, library) == 0
 
 
 def test_overlay_book_dict_fills_and_prefers(db):

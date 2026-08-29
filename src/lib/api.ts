@@ -1310,6 +1310,16 @@ export interface CalibreLinkResponse {
   hardcover_id: number | null;
 }
 
+export interface CalibreByHardcover {
+  calibre_book_id: number;
+  title: string | null;
+  link_source: string | null;
+  link_confirmed: boolean;
+  ebook_formats: string[];
+  audiobook_formats: string[];
+  format_details: Array<{ format: string; size: number | null; name: string }>;
+}
+
 export interface CalibreBooksResponse {
   books: CalibreBook[];
   total: number;
@@ -1411,4 +1421,15 @@ export const calibreApi = {
     apiRequest<CalibreLinkResponse>(`/api/calibre/books/${id}/refresh-metadata`, {
       method: 'POST',
     }),
+
+  /** Resolve a Hardcover id to its linked Calibre library book, or null. */
+  getByHardcover: async (hardcoverId: number): Promise<CalibreByHardcover | null> => {
+    try {
+      return await apiRequest<CalibreByHardcover>(
+        `/api/calibre/by-hardcover/${hardcoverId}`,
+      );
+    } catch {
+      return null;
+    }
+  },
 };

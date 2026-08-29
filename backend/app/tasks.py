@@ -492,6 +492,7 @@ async def reconcile_calibre_library():
             try:
                 calibre_link_service.heal_stale_links(db, library_path)
                 calibre_link_service.backfill_fuzzy_links(db, library_path)
+                calibre_link_service.sync_availability_flags(db, library_path)
             except Exception as e:
                 logger.error("calibre_link_maintenance_error", error=str(e))
                 db.rollback()
@@ -573,11 +574,13 @@ _LAST_LINK_MAINTENANCE = datetime.min.replace(tzinfo=timezone.utc)
 
 
 async def _enrich_linked_calibre_books(db: Session) -> int:
-    """Fill Hardcover metadata for linked Calibre books that have none yet.
+    """Fill in Hardcover metadata for linked Calibre books that are missing it.
 
-    Runs a small batch each minute (from reconcile_calibre_library). Covers both
-    exact download links and fuzzy links; books already refreshed are skipped.
+    Runs a small batch each minute (from reconcile_calibre_library). Targets
+    linked books with a gap in the fields the overlay shows — description, cover,
+    genres — or that have never been refreshed. Uses the full detail data path.
     """
+    from sqlalchemy import and_, or_
     from app.models import Book, CalibreBookLink
     from app.routers.calibre import _bool_setting, OVERLAY_ENABLED_KEY
     from app.services.hardcover_metadata import enrich_book_from_hardcover
@@ -585,10 +588,23 @@ async def _enrich_linked_calibre_books(db: Session) -> int:
     if not _bool_setting(db, OVERLAY_ENABLED_KEY, True):
         return 0
 
+    stale_before = datetime.now(timezone.utc) - timedelta(days=7)
     rows = (
         db.query(CalibreBookLink)
         .join(Book, Book.id == CalibreBookLink.book_id)
-        .filter(Book.last_refreshed.is_(None))
+        .filter(
+            or_(
+                Book.last_refreshed.is_(None),
+                and_(
+                    Book.last_refreshed < stale_before,
+                    or_(
+                        Book.description.is_(None),
+                        Book.cover_url.is_(None),
+                        Book.genres.is_(None),
+                    ),
+                ),
+            )
+        )
         .limit(CALIBRE_ENRICH_BATCH)
         .all()
     )
@@ -599,7 +615,7 @@ async def _enrich_linked_calibre_books(db: Session) -> int:
     for link in rows:
         book = link.book
         try:
-            changed = await enrich_book_from_hardcover(db, book)
+            ok = await enrich_book_from_hardcover(db, book)
         except Exception as exc:
             logger.warning("calibre_book_enrich_failed", book_id=book.id, error=str(exc))
             db.rollback()
@@ -609,7 +625,7 @@ async def _enrich_linked_calibre_books(db: Session) -> int:
             book.last_refreshed = datetime.now(timezone.utc)
         try:
             db.commit()
-            if changed:
+            if ok:
                 enriched += 1
         except Exception as exc:
             db.rollback()

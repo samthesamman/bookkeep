@@ -418,6 +418,18 @@ async def set_book_link(
         calibre_title=cal.get("title"),
     )
 
+    # Reflect the library's formats onto the Book so the rest of the app treats
+    # it as owned.
+    kinds = {
+        calibre_service.classify_format(d["format"])
+        for d in (cal.get("format_details") or [])
+    }
+    if "ebook" in kinds:
+        book.ebook_available = True
+    if "audiobook" in kinds:
+        book.audiobook_available = True
+    db.commit()
+
     from app.services.hardcover_metadata import enrich_book_from_hardcover
 
     try:
@@ -436,6 +448,58 @@ async def set_book_link(
         link_source="manual",
         link_confirmed=True,
         hardcover_id=book.hardcover_id,
+    )
+
+
+class CalibreByHardcoverResponse(BaseModel):
+    calibre_book_id: int
+    title: Optional[str]
+    link_source: Optional[str]
+    link_confirmed: bool
+    ebook_formats: list[str]
+    audiobook_formats: list[str]
+    format_details: list[dict[str, Any]]
+
+
+@router.get("/by-hardcover/{hardcover_id}", response_model=CalibreByHardcoverResponse)
+async def calibre_book_by_hardcover(
+    hardcover_id: int,
+    db: Session = Depends(get_db),
+    _: models.User = Depends(get_current_user),
+):
+    """Resolve a Hardcover book id to its linked Calibre library book, if any.
+
+    Used by the shared book detail page to offer download / email straight from
+    the library. 404 when there is no link or no readable library.
+    """
+    link = (
+        db.query(models.CalibreBookLink)
+        .join(models.Book, models.Book.id == models.CalibreBookLink.book_id)
+        .filter(models.Book.hardcover_id == hardcover_id)
+        .first()
+    )
+    if link is None:
+        raise HTTPException(status_code=404, detail="No linked Calibre book")
+
+    library_path = get_active_library_path(db)
+    if not library_path:
+        raise HTTPException(status_code=404, detail="Calibre library is not configured")
+
+    cal = calibre_service.get_book(library_path, link.calibre_book_id)
+    if cal is None:
+        raise HTTPException(status_code=404, detail="Linked Calibre book not found")
+
+    details = cal.get("format_details") or []
+    ebook = [d["format"] for d in details if calibre_service.classify_format(d["format"]) == "ebook"]
+    audio = [d["format"] for d in details if calibre_service.classify_format(d["format"]) == "audiobook"]
+    return CalibreByHardcoverResponse(
+        calibre_book_id=link.calibre_book_id,
+        title=cal.get("title"),
+        link_source=link.source,
+        link_confirmed=bool(link.confirmed),
+        ebook_formats=ebook,
+        audiobook_formats=audio,
+        format_details=details,
     )
 
 

@@ -9,8 +9,10 @@ import { RequestDialog } from '@/components/books/RequestDialog';
 import { SearchReleaseDialog } from '@/components/books/SearchReleaseDialog';
 import { BookCard } from '@/components/books/BookCard';
 import { useBookDetails, useBookPrompts } from '@/hooks/useHardcoverBooks';
-import { requestsApi, booksApi, directDownloadApi } from '@/lib/api';
+import { requestsApi, booksApi, directDownloadApi, calibreApi } from '@/lib/api';
 import { transformHardcoverBook } from '@/lib/hardcover';
+import { CalibreFormatActions } from '@/components/books/CalibreFormatActions';
+import { CalibreRelinkDialog } from '@/components/books/CalibreRelinkDialog';
 import { toast } from 'sonner';
 import { useUser } from '@/contexts/UserContext';
 import { usePageVisibility } from '@/hooks/usePageVisibility';
@@ -22,6 +24,7 @@ export default function BookDetails() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchFormat, setSearchFormat] = useState<'ebook' | 'audiobook'>('ebook');
   const [searchSource, setSearchSource] = useState<'prowlarr' | 'direct' | undefined>(undefined);
+  const [relinkOpen, setRelinkOpen] = useState(false);
   const queryClient = useQueryClient();
   const { user, isAdmin } = useUser();
   const isVisible = usePageVisibility();
@@ -61,6 +64,36 @@ export default function BookDetails() {
     staleTime: 5 * 60 * 1000, // Cache for 5 minutes
   });
   const directDownloadsEnabled = directDownloadSettings?.enabled ?? false;
+
+  // Is this book already in the Calibre library (via the metadata-overlay link)?
+  const { data: calibre } = useQuery({
+    queryKey: ['calibre', 'by-hardcover', hardcoverId],
+    queryFn: () => calibreApi.getByHardcover(hardcoverId as number),
+    enabled: hasHardcoverId,
+    staleTime: 30_000,
+  });
+  const calibreEbookFormats =
+    calibre?.format_details.filter((f) => calibre.ebook_formats.includes(f.format)) ?? [];
+  const calibreAudioFormats =
+    calibre?.format_details.filter((f) => calibre.audiobook_formats.includes(f.format)) ?? [];
+
+  const invalidateCalibre = () => {
+    queryClient.invalidateQueries({ queryKey: ['calibre', 'by-hardcover', hardcoverId] });
+    queryClient.invalidateQueries({ queryKey: ['hardcover', 'book', id] });
+    queryClient.invalidateQueries({ queryKey: ['book', 'by-hardcover', hardcoverId] });
+  };
+  const calibreLinkMutation = useMutation({
+    mutationFn: async (action: 'refresh' | 'unlink') => {
+      if (!calibre) return;
+      if (action === 'refresh') return calibreApi.refreshMetadata(calibre.calibre_book_id);
+      return calibreApi.clearLink(calibre.calibre_book_id);
+    },
+    onSuccess: (_d, action) => {
+      invalidateCalibre();
+      toast.success(action === 'refresh' ? 'Metadata refreshed from Hardcover' : 'Calibre link removed');
+    },
+    onError: (err: Error) => toast.error('Action failed', { description: err.message }),
+  });
 
   const ebookRequestStatus = requestStatus?.ebook ?? null;
   const audiobookRequestStatus = requestStatus?.audiobook ?? null;
@@ -188,11 +221,13 @@ export default function BookDetails() {
     dbBook?.ebook_available ||
     book.ebookAvailable ||
     ebookRequestAvailable ||
+    calibreEbookFormats.length > 0 ||
     false;
   const audiobookAvailable =
     dbBook?.audiobook_available ||
     book.audiobookAvailable ||
     audiobookRequestAvailable ||
+    calibreAudioFormats.length > 0 ||
     false;
   const ebookNotFound = ebookRequestStatus === 'not_found';
   const audiobookNotFound = audiobookRequestStatus === 'not_found';
@@ -368,6 +403,58 @@ export default function BookDetails() {
                   </div>
                 )}
               </div>
+
+              {/* In your library — download / email straight from Calibre */}
+              {calibre && (calibreEbookFormats.length > 0 || calibreAudioFormats.length > 0) && (
+                <div className="rounded-2xl border border-border/50 bg-card/30 p-5 text-left space-y-4">
+                  <div className="flex items-center gap-2">
+                    <Library className="h-4 w-4 text-primary" />
+                    <h2 className="text-sm font-semibold text-foreground">In your library</h2>
+                    {isAdmin && (
+                      <span className="ml-auto flex gap-1">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          disabled={calibreLinkMutation.isPending}
+                          onClick={() => calibreLinkMutation.mutate('refresh')}
+                        >
+                          Refresh
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          disabled={calibreLinkMutation.isPending}
+                          onClick={() => setRelinkOpen(true)}
+                        >
+                          Change
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          disabled={calibreLinkMutation.isPending}
+                          onClick={() => calibreLinkMutation.mutate('unlink')}
+                        >
+                          Unlink
+                        </Button>
+                      </span>
+                    )}
+                  </div>
+                  {calibreEbookFormats.length > 0 && (
+                    <CalibreFormatActions
+                      calibreBookId={calibre.calibre_book_id}
+                      formats={calibreEbookFormats}
+                      heading={calibreAudioFormats.length > 0 ? 'eBook' : null}
+                    />
+                  )}
+                  {calibreAudioFormats.length > 0 && (
+                    <CalibreFormatActions
+                      calibreBookId={calibre.calibre_book_id}
+                      formats={calibreAudioFormats}
+                      heading={calibreEbookFormats.length > 0 ? 'Audiobook' : null}
+                    />
+                  )}
+                </div>
+              )}
 
               {/* Action buttons */}
               <div className="flex flex-wrap justify-center md:justify-start gap-3 pt-4">
@@ -546,6 +633,15 @@ export default function BookDetails() {
           </section>
         )}
       </div>
+
+      {calibre && (
+        <CalibreRelinkDialog
+          calibreId={calibre.calibre_book_id}
+          open={relinkOpen}
+          onOpenChange={setRelinkOpen}
+          onLinked={invalidateCalibre}
+        />
+      )}
 
       <RequestDialog
         book={book}

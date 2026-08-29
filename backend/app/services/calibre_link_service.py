@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Iterable, Optional
 
 import structlog
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.models import Book, CalibreBookLink
 from app.services import calibre_service
@@ -164,6 +164,43 @@ def overlay_book_dict(
         out["description"] = _pick(book.description, out.get("description"), prefer_local)
 
     return out
+
+
+def sync_availability_flags(db: Session, library_path: str) -> int:
+    """Set ebook_available / audiobook_available on linked Books from their
+    Calibre formats, so the rest of the app sees a linked library book as owned.
+    """
+    links = db.query(CalibreBookLink).options(joinedload(CalibreBookLink.book)).all()
+    if not links:
+        return 0
+    try:
+        fmt_map = calibre_service.formats_for_ids(
+            library_path, [l.calibre_book_id for l in links]
+        )
+    except calibre_service.CalibreError as exc:
+        logger.warning("calibre_link_availability_probe_failed", error=str(exc))
+        return 0
+
+    changed = 0
+    for link in links:
+        formats = fmt_map.get(link.calibre_book_id, [])
+        kinds = {calibre_service.classify_format(f) for f in formats}
+        book = link.book
+        if book is None:
+            continue
+        want_ebook = "ebook" in kinds
+        want_audio = "audiobook" in kinds
+        if want_ebook and not book.ebook_available:
+            book.ebook_available = True
+            changed += 1
+        if want_audio and not book.audiobook_available:
+            book.audiobook_available = True
+            changed += 1
+
+    if changed:
+        db.commit()
+        logger.info("calibre_link_availability_synced", changed=changed)
+    return changed
 
 
 def heal_stale_links(db: Session, library_path: str) -> int:

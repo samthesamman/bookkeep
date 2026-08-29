@@ -1410,6 +1410,124 @@ async def get_author_details(
 
     return response
 
+BOOK_DETAIL_QUERY = """
+query GetBook($id: Int!) {
+  books_by_pk(id: $id) {
+    id
+    title
+    slug
+    release_year
+    release_date
+    pages
+    description
+    cached_image
+    cached_contributors
+    rating
+    ratings_count
+    users_count
+    activities_count
+    default_ebook_edition_id
+    default_audio_edition_id
+    default_physical_edition_id
+    book_series {
+      series_id
+      position
+      series {
+        primary_books_count
+        name
+        id
+      }
+    }
+    contributions {
+      contribution
+      author {
+        id
+        name
+        slug
+      }
+    }
+    taggings(limit: 10) {
+      tag {
+        tag
+      }
+    }
+    editions(limit: 5) {
+      id
+      title
+      edition_format
+      physical_format
+      reading_format_id
+      pages
+      isbn_10
+      isbn_13
+      asin
+    }
+  }
+}
+"""
+
+
+async def refresh_local_book(
+    db: Session,
+    *,
+    hardcover_id: Optional[int] = None,
+    slug: Optional[str] = None,
+) -> Optional[Book]:
+    """Fetch a book's full detail from Hardcover and upsert the local ``Book`` row.
+
+    Same data path as ``GET /details/{id}`` — use this anywhere a ``Book`` row
+    needs the richest available metadata (description, cover, series, genres,
+    edition ids, ISBN). Resolves ``slug`` to an id first when needed and links
+    an existing slug-only row so ``_save_book_to_db`` does not duplicate it.
+    """
+    if hardcover_id is None and slug:
+        data = await lookup_book_by_slug(slug, db)
+        if data:
+            hardcover_id = data.get("id")
+    if not hardcover_id:
+        return None
+
+    if slug:
+        row = db.query(Book).filter(
+            Book.hardcover_slug == slug, Book.hardcover_id.is_(None)
+        ).first()
+        if row is not None and not db.query(Book).filter(
+            Book.hardcover_id == hardcover_id
+        ).first():
+            row.hardcover_id = hardcover_id
+            db.flush()
+
+    try:
+        result = await execute_graphql(BOOK_DETAIL_QUERY, {"id": int(hardcover_id)}, db=db)
+    except Exception as exc:
+        logger.warning("refresh_local_book_fetch_failed", hardcover_id=hardcover_id, error=str(exc))
+        return None
+    book_data = result.get("books_by_pk")
+    if not book_data:
+        return None
+
+    book = _save_book_to_db(book_data, db)
+    if book is not None:
+        isbn = _first_isbn(book_data)
+        if isbn and not book.isbn and not db.query(Book).filter(
+            Book.isbn == isbn, Book.id != book.id
+        ).first():
+            book.isbn = isbn
+            try:
+                db.commit()
+            except Exception:
+                db.rollback()
+    return book
+
+
+def _first_isbn(book_data: dict) -> Optional[str]:
+    for ed in book_data.get("editions") or []:
+        val = ed.get("isbn_13") or ed.get("isbn_10")
+        if val:
+            return val
+    return None
+
+
 @router.get("/details/{book_id}", response_model=schemas.HardcoverBookDetailResponse)
 async def get_book_details(
     book_id: int,
@@ -1443,63 +1561,7 @@ async def get_book_details(
     
     # Call API last
     try:
-        graphql_query = """
-        query GetBook($id: Int!) {
-          books_by_pk(id: $id) {
-            id
-            title
-            slug
-            release_year
-            release_date
-            pages
-            description
-            cached_image
-            cached_contributors
-            rating
-            ratings_count
-            users_count
-            activities_count
-            default_ebook_edition_id
-            default_audio_edition_id
-            default_physical_edition_id
-            book_series {
-              series_id
-              position
-              series {
-                primary_books_count
-                name
-                id
-              }
-            }
-            contributions {
-              contribution
-              author {
-                id
-                name
-                slug
-              }
-            }
-            taggings(limit: 10) {
-              tag {
-                tag
-              }
-            }
-            editions(limit: 5) {
-              id
-              title
-              edition_format
-              physical_format
-              reading_format_id
-              pages
-              isbn_10
-              isbn_13
-              asin
-            }
-          }
-        }
-        """
-        
-        result = await execute_graphql(graphql_query, {"id": book_id}, db=db)
+        result = await execute_graphql(BOOK_DETAIL_QUERY, {"id": book_id}, db=db)
         book_data = result.get("books_by_pk")
         
         if not book_data:

@@ -6,10 +6,8 @@ import {
   Star,
   ChevronLeft,
   ChevronRight,
-  Download,
   BookOpen,
   Loader2,
-  Mail,
   RefreshCw,
   Link2,
   Link2Off,
@@ -21,12 +19,6 @@ import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Sheet, SheetContent } from '@/components/ui/sheet';
 import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
-import {
   Select,
   SelectContent,
   SelectItem,
@@ -34,9 +26,10 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { toast } from 'sonner';
-import { Link } from 'react-router-dom';
-import { calibreApi, hardcoverApi, type CalibreBook, type CalibreSort } from '@/lib/api';
-import { transformHardcoverBook, type HardcoverBook } from '@/lib/hardcover';
+import { Link, useNavigate } from 'react-router-dom';
+import { calibreApi, type CalibreBook, type CalibreSort } from '@/lib/api';
+import { CalibreFormatActions } from '@/components/books/CalibreFormatActions';
+import { CalibreRelinkDialog } from '@/components/books/CalibreRelinkDialog';
 import { formatRating } from '@/lib/utils';
 import { useUser } from '@/contexts/UserContext';
 
@@ -125,108 +118,6 @@ function CalibreBookCard({ book, onOpen }: { book: CalibreBook; onOpen: () => vo
   );
 }
 
-/** Search Hardcover and link the chosen book to this Calibre entry. */
-function RelinkDialog({
-  calibreId,
-  open,
-  onOpenChange,
-  onLinked,
-}: {
-  calibreId: number;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  onLinked: () => void;
-}) {
-  const [term, setTerm] = useState('');
-  const [query, setQuery] = useState('');
-  const [linkingId, setLinkingId] = useState<number | null>(null);
-
-  useEffect(() => {
-    const t = setTimeout(() => setQuery(term.trim()), 350);
-    return () => clearTimeout(t);
-  }, [term]);
-
-  const { data, isFetching } = useQuery({
-    queryKey: ['hardcover-relink-search', query],
-    queryFn: () => hardcoverApi.search(query, 15),
-    enabled: query.length > 1,
-  });
-
-  const results = useMemo(
-    () => (data?.books ?? []).map((b: HardcoverBook) => transformHardcoverBook(b)),
-    [data],
-  );
-
-  const handleLink = async (hardcoverId: number) => {
-    setLinkingId(hardcoverId);
-    try {
-      await calibreApi.linkBook(calibreId, { hardcover_id: hardcoverId });
-      toast.success('Book linked', { description: 'Metadata will refresh from Hardcover.' });
-      onLinked();
-      onOpenChange(false);
-    } catch (error) {
-      toast.error('Failed to link book', {
-        description: error instanceof Error ? error.message : undefined,
-      });
-    } finally {
-      setLinkingId(null);
-    }
-  };
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg">
-        <DialogHeader>
-          <DialogTitle>Link to a Hardcover book</DialogTitle>
-        </DialogHeader>
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            autoFocus
-            value={term}
-            onChange={(e) => setTerm(e.target.value)}
-            placeholder="Search by title or author..."
-            className="pl-9"
-          />
-        </div>
-        <div className="max-h-80 space-y-1 overflow-y-auto">
-          {isFetching && <p className="p-2 text-sm text-muted-foreground">Searching…</p>}
-          {!isFetching && query.length > 1 && results.length === 0 && (
-            <p className="p-2 text-sm text-muted-foreground">No matches.</p>
-          )}
-          {results.map((r) => (
-            <button
-              key={r.id}
-              type="button"
-              disabled={linkingId !== null}
-              onClick={() => handleLink(r.hardcoverId)}
-              className="flex w-full items-center gap-3 rounded-md p-2 text-left hover:bg-secondary disabled:opacity-50"
-            >
-              <img
-                src={r.cover}
-                alt=""
-                className="h-14 w-10 shrink-0 rounded object-cover"
-              />
-              <span className="min-w-0 flex-1">
-                <span className="line-clamp-1 block text-sm font-medium text-foreground">
-                  {r.title}
-                </span>
-                <span className="line-clamp-1 block text-xs text-muted-foreground">
-                  {r.author}
-                  {r.publishedDate ? ` · ${String(r.publishedDate).slice(0, 4)}` : ''}
-                </span>
-              </span>
-              {linkingId === r.hardcoverId && (
-                <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
-              )}
-            </button>
-          ))}
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
 const LINK_SOURCE_LABEL: Record<string, string> = {
   download: 'matched from your request',
   manual: 'linked by hand',
@@ -242,13 +133,10 @@ function BookDetailSheet({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
-  const [downloading, setDownloading] = useState<string | null>(null);
-  const [emailing, setEmailing] = useState<string | null>(null);
   const [relinkOpen, setRelinkOpen] = useState(false);
   const [busyLink, setBusyLink] = useState(false);
   const queryClient = useQueryClient();
-  const { user, isAdmin } = useUser();
-  const deliveryEmail = user?.book_delivery_email || '';
+  const { isAdmin } = useUser();
 
   const { data: book, isLoading } = useQuery({
     queryKey: ['calibre-book', bookId],
@@ -300,33 +188,6 @@ function BookDetailSheet({
       });
     } finally {
       setBusyLink(false);
-    }
-  };
-
-  const handleDownload = async (format: string, name: string) => {
-    setDownloading(format);
-    try {
-      await calibreApi.downloadFormat(bookId as number, format, `${name}.${format.toLowerCase()}`);
-    } catch (error) {
-      toast.error('Download failed', {
-        description: error instanceof Error ? error.message : undefined,
-      });
-    } finally {
-      setDownloading(null);
-    }
-  };
-
-  const handleEmail = async (format: string) => {
-    setEmailing(format);
-    try {
-      const result = await calibreApi.emailBook(bookId as number, format);
-      toast.success('Book emailed', { description: result.message });
-    } catch (error) {
-      toast.error('Failed to email book', {
-        description: error instanceof Error ? error.message : undefined,
-      });
-    } finally {
-      setEmailing(null);
     }
   };
 
@@ -483,67 +344,18 @@ function BookDetailSheet({
               />
             )}
 
-            <div className="space-y-2">
-              <h3 className="text-sm font-semibold text-foreground">Download</h3>
-              {book.format_details.length === 0 && (
-                <p className="text-sm text-muted-foreground">No downloadable files for this book.</p>
-              )}
-              <div className="space-y-2">
-                {book.format_details.map((fmt) => (
-                  <div key={fmt.format} className="flex flex-wrap items-center gap-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={downloading !== null}
-                      onClick={() => handleDownload(fmt.format, fmt.name)}
-                    >
-                      {downloading === fmt.format ? (
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      ) : (
-                        <Download className="mr-2 h-4 w-4" />
-                      )}
-                      {fmt.format}
-                      {fmt.size ? (
-                        <span className="ml-1 text-xs text-muted-foreground">
-                          ({(fmt.size / 1024 / 1024).toFixed(1)} MB)
-                        </span>
-                      ) : null}
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      disabled={emailing !== null || !deliveryEmail}
-                      title={
-                        deliveryEmail
-                          ? `Email this ${fmt.format} to ${deliveryEmail}`
-                          : 'Set a delivery email under Settings first'
-                      }
-                      onClick={() => handleEmail(fmt.format)}
-                    >
-                      {emailing === fmt.format ? (
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      ) : (
-                        <Mail className="mr-2 h-4 w-4" />
-                      )}
-                      Email to myself
-                    </Button>
-                  </div>
-                ))}
-              </div>
-              {!deliveryEmail && book.format_details.length > 0 && (
-                <p className="text-xs text-muted-foreground">
-                  Add a delivery email under{' '}
-                  <Link to="/settings" className="text-primary underline">
-                    Settings
-                  </Link>{' '}
-                  to email books to yourself.
-                </p>
-              )}
-            </div>
+            {book.format_details.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No downloadable files for this book.</p>
+            ) : (
+              <CalibreFormatActions
+                calibreBookId={book.id}
+                formats={book.format_details}
+              />
+            )}
           </div>
         )}
         {bookId != null && (
-          <RelinkDialog
+          <CalibreRelinkDialog
             calibreId={bookId}
             open={relinkOpen}
             onOpenChange={setRelinkOpen}
@@ -556,6 +368,7 @@ function BookDetailSheet({
 }
 
 export default function MyBooks() {
+  const navigate = useNavigate();
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
   const [sort, setSort] = useState<CalibreSort>('added');
@@ -675,8 +488,12 @@ export default function MyBooks() {
                   key={book.id}
                   book={book}
                   onOpen={() => {
-                    setSelectedId(book.id);
-                    setSheetOpen(true);
+                    if (book.hardcover_id) {
+                      navigate(`/book/${book.hardcover_id}`);
+                    } else {
+                      setSelectedId(book.id);
+                      setSheetOpen(true);
+                    }
                   }}
                 />
               ))}

@@ -46,97 +46,44 @@ def _genres(hc: dict) -> Optional[str]:
     return joined or None
 
 
-async def fetch_hardcover_payload(
-    db,
-    *,
-    slug: Optional[str] = None,
-    hardcover_id: Optional[int] = None,
-    title: Optional[str] = None,
-    author: Optional[str] = None,
-) -> Optional[dict]:
-    """Resolve a Hardcover book payload by slug, id, or title/author search."""
-    from app.routers.hardcover import (
-        execute_graphql,
-        lookup_book_by_slug,
-        lookup_book_by_title_author,
-    )
+async def enrich_book_from_hardcover(db, book, *, overwrite: bool = True) -> bool:
+    """Refresh ``book`` with the fullest metadata Hardcover has. Returns True on success.
 
-    if slug:
-        data = await lookup_book_by_slug(slug, db)
-        if data:
-            return data
-    if hardcover_id:
-        data = await execute_graphql(
-            """
-            query GetBook($id: Int!) {
-              books_by_pk(id: $id) {
-                id title slug release_year release_date pages description
-                cached_image rating ratings_count users_count
-                book_series { position series { id name } }
-                taggings(limit: 10) { tag { tag } }
-              }
-            }
-            """,
-            {"id": int(hardcover_id)},
-            db,
-        )
-        book = (data or {}).get("books_by_pk")
-        if book:
-            return book
-    if title:
-        data = await lookup_book_by_title_author(title, author, db)
-        if data:
-            return data
-    return None
-
-
-async def enrich_book_from_hardcover(
-    db,
-    book,
-    *,
-    slug: Optional[str] = None,
-    hardcover_id: Optional[int] = None,
-    title: Optional[str] = None,
-    author: Optional[str] = None,
-    overwrite: bool = False,
-) -> bool:
-    """Fetch Hardcover metadata for ``book`` and apply it. Returns True if changed.
-
-    Also backfills ``book.hardcover_id`` / ``book.hardcover_slug`` when the
-    lookup resolves them and the book has none.
+    Uses the same data path as ``GET /api/hardcover/details`` (description, cover,
+    series, genres, edition ids, ISBN). When the book has neither a Hardcover id
+    nor slug, a title/author search resolves one first. ``overwrite`` is kept for
+    signature compatibility; the underlying refresh always takes Hardcover's data.
     """
-    hc = await fetch_hardcover_payload(
-        db,
-        slug=slug or getattr(book, "hardcover_slug", None),
-        hardcover_id=hardcover_id or getattr(book, "hardcover_id", None),
-        title=title or getattr(book, "title", None),
-        author=author or getattr(book, "author", None),
-    )
-    if not hc:
-        return False
+    from app.routers.hardcover import lookup_book_by_title_author, refresh_local_book
 
-    changed = False
-    hc_id = hc.get("id")
-    if hc_id and not book.hardcover_id:
-        dupe = None
-        try:
-            from app.models import Book
+    hardcover_id = getattr(book, "hardcover_id", None)
+    slug = getattr(book, "hardcover_slug", None)
 
-            dupe = (
-                db.query(Book)
-                .filter(Book.hardcover_id == hc_id, Book.id != book.id)
-                .first()
-            )
-        except Exception:
-            dupe = None
-        if dupe is None:
-            book.hardcover_id = hc_id
-            changed = True
-    if hc.get("slug") and not getattr(book, "hardcover_slug", None):
-        book.hardcover_slug = hc.get("slug")
-        changed = True
+    if not hardcover_id and not slug:
+        found = await lookup_book_by_title_author(book.title, book.author, db)
+        if not found:
+            return False
+        hardcover_id = found.get("id")
+        slug = found.get("slug")
+        if not hardcover_id:
+            return False
+        # Adopt the resolved identity on this row so refresh_local_book updates
+        # it rather than creating a duplicate.
+        from app.models import Book
 
-    return apply_hardcover_metadata(book, hc, overwrite=overwrite) or changed
+        clash = (
+            db.query(Book)
+            .filter(Book.hardcover_id == hardcover_id, Book.id != book.id)
+            .first()
+        )
+        if clash is not None:
+            return False
+        book.hardcover_id = hardcover_id
+        book.hardcover_slug = slug or book.hardcover_slug
+        db.flush()
+
+    refreshed = await refresh_local_book(db, hardcover_id=hardcover_id, slug=slug)
+    return refreshed is not None
 
 
 def apply_hardcover_metadata(book, hc: dict, *, overwrite: bool = False) -> bool:

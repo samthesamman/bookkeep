@@ -68,6 +68,25 @@ def existing_book_ids(library_path: str) -> set[int]:
         conn.close()
 
 
+def formats_for_ids(library_path: str, ids: list[int]) -> dict[int, list[str]]:
+    """Return {book_id: [FORMAT, ...]} for the given ids, in one query."""
+    if not ids:
+        return {}
+    conn = _connect(library_path)
+    try:
+        rows = conn.execute(
+            f"SELECT book, format FROM data WHERE book IN ({','.join('?' * len(ids))})",
+            list(ids),
+        ).fetchall()
+    finally:
+        conn.close()
+    out: dict[int, list[str]] = {}
+    for r in rows:
+        if r["format"]:
+            out.setdefault(int(r["book"]), []).append(r["format"].upper())
+    return out
+
+
 def book_identities(
     library_path: str, ids: Optional[list[int]] = None
 ) -> list[tuple[int, str, Optional[str], Optional[str]]]:
@@ -280,6 +299,16 @@ def cover_file(library_path: str, book_id: int) -> Optional[str]:
 # Preferred format order when auto-picking a file to email for a request.
 EBOOK_FORMAT_PREFERENCE = ["EPUB", "AZW3", "MOBI", "AZW", "PDF", "FB2", "DOCX", "TXT", "RTF"]
 AUDIOBOOK_FORMAT_PREFERENCE = ["M4B", "M4A", "MP3", "AAC", "FLAC", "OGG"]
+
+
+def classify_format(fmt: str) -> str:
+    """Return 'ebook', 'audiobook', or 'other' for a Calibre format name."""
+    up = (fmt or "").upper()
+    if up in EBOOK_FORMAT_PREFERENCE:
+        return "ebook"
+    if up in AUDIOBOOK_FORMAT_PREFERENCE:
+        return "audiobook"
+    return "other"
 
 
 # Words ignored when comparing titles.
