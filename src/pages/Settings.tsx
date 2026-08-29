@@ -3,6 +3,7 @@ import { Save, TestTube, CheckCircle, XCircle, Eye, EyeOff, Lock, Plus, Edit, Tr
 import ProwlarrSettings from '@/components/settings/ProwlarrSettings';
 import DownloadClientsSettings from '@/components/settings/DownloadClientsSettings';
 import DirectDownloadSettings from '@/components/settings/DirectDownloadSettings';
+import CalibreSettings from '@/components/settings/CalibreSettings';
 import DirectoryPicker from '@/components/settings/DirectoryPicker';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -1853,6 +1854,9 @@ export default function Settings() {
 
           {/* Direct Download Settings */}
           <DirectDownloadSettings />
+
+          {/* Calibre Library Settings */}
+          <CalibreSettings />
         </TabsContent>
 
         <TabsContent value="jobs" className="space-y-6 mt-6">

@@ -1197,3 +1197,109 @@ export const hardcoverSyncApi = {
       method: 'POST',
     }),
 };
+
+// ---------------------------------------------------------------------------
+// Calibre library ("My Books")
+// ---------------------------------------------------------------------------
+export interface CalibreSettings {
+  id: number;
+  library_path: string | null;
+  enabled: boolean;
+  valid: boolean;
+  book_count: number | null;
+  error: string | null;
+}
+
+export interface CalibreBook {
+  id: number;
+  title: string;
+  authors: string;
+  series: string | null;
+  series_index: number | null;
+  rating: number | null;
+  pubdate: string | null;
+  added: string | null;
+  has_cover: boolean;
+  formats: string[];
+}
+
+export interface CalibreBookDetail extends CalibreBook {
+  description: string | null;
+  tags: string[];
+  publisher: string | null;
+  languages: string[];
+  identifiers: Record<string, string>;
+  format_details: Array<{ format: string; size: number | null; name: string }>;
+}
+
+export interface CalibreBooksResponse {
+  books: CalibreBook[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export type CalibreSort = 'title' | 'author' | 'added' | 'pubdate';
+
+/** Fetch a binary endpoint with the bearer token and return it as a Blob. */
+async function authedBlob(endpoint: string): Promise<Blob> {
+  const doFetch = (token: string | null) =>
+    fetch(`${API_BASE_URL}${endpoint}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+
+  let response = await doFetch(getAccessToken());
+  if (response.status === 401) {
+    const refreshed = await refreshAccessToken();
+    if (refreshed) {
+      response = await doFetch(getAccessToken());
+    }
+  }
+  if (!response.ok) {
+    throw new Error(`Request failed: ${response.status}`);
+  }
+  return response.blob();
+}
+
+export const calibreApi = {
+  getSettings: () => apiRequest<CalibreSettings>('/api/calibre/settings'),
+
+  updateSettings: (data: { library_path: string | null; enabled: boolean }) =>
+    apiRequest<CalibreSettings>('/api/calibre/settings', {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+
+  test: (library_path: string) =>
+    apiRequest<{ success: boolean; book_count: number | null; error: string | null }>(
+      '/api/calibre/test',
+      { method: 'POST', body: JSON.stringify({ library_path }) },
+    ),
+
+  getBooks: (params: { search?: string; sort?: CalibreSort; page?: number; pageSize?: number }) => {
+    const q = new URLSearchParams();
+    if (params.search) q.set('search', params.search);
+    q.set('sort', params.sort ?? 'added');
+    q.set('page', String(params.page ?? 1));
+    q.set('page_size', String(params.pageSize ?? 50));
+    return apiRequest<CalibreBooksResponse>(`/api/calibre/books?${q.toString()}`);
+  },
+
+  getBook: (id: number) => apiRequest<CalibreBookDetail>(`/api/calibre/books/${id}`),
+
+  fetchCover: (id: number) => authedBlob(`/api/calibre/books/${id}/cover`),
+
+  downloadFormat: async (id: number, format: string, filename?: string) => {
+    const blob = await authedBlob(
+      `/api/calibre/books/${id}/download?format=${encodeURIComponent(format)}`,
+    );
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename || `book-${id}.${format.toLowerCase()}`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  },
+};

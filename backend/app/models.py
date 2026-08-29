@@ -357,3 +357,17 @@ class DirectDownloadSettings(Base):
     # Metadata
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+
+class CalibreSettings(Base):
+    """Points the app at a local Calibre library directory (containing metadata.db).
+
+    Single-row configuration table, mirroring DirectDownloadSettings.
+    """
+    __tablename__ = "calibre_settings"
+
+    id = Column(Integer, primary_key=True, index=True)
+    library_path = Column(String, nullable=True)  # directory containing metadata.db
+    enabled = Column(Boolean, default=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
