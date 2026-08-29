@@ -235,6 +235,141 @@ def cover_file(library_path: str, book_id: int) -> Optional[str]:
     return None
 
 
+# Preferred format order when auto-picking a file to email for a request.
+EBOOK_FORMAT_PREFERENCE = ["EPUB", "AZW3", "MOBI", "AZW", "PDF", "FB2", "DOCX", "TXT", "RTF"]
+AUDIOBOOK_FORMAT_PREFERENCE = ["M4B", "M4A", "MP3", "AAC", "FLAC", "OGG"]
+
+
+# Words ignored when comparing titles.
+_TITLE_STOPWORDS = {"the", "a", "an", "and", "&", "of", "to", "in"}
+
+
+def _norm(text: str) -> str:
+    out = (text or "").lower()
+    out = out.replace("&", " and ")
+    for ch in [",", ".", ":", ";", "!", "?", "'", "’", '"', "(", ")", "[", "]", "{", "}", "-", "–", "—", "_", "/"]:
+        out = out.replace(ch, " ")
+    return " ".join(out.split())
+
+
+def _title_tokens(text: str) -> set:
+    return {w for w in _norm(text).split() if w not in _TITLE_STOPWORDS}
+
+
+def _titles_match(a: set, b: set) -> bool:
+    """True when two title token sets are the same book.
+
+    Exact token-set equality always matches. Otherwise one side must be fully
+    contained in the other with at least two shared tokens (handles a subtitle
+    on one side only, e.g. "The Final Empire" vs "Mistborn: The Final Empire"),
+    or the two must have a strong Jaccard overlap. Single-word titles only match
+    exactly, so "Dune" never matches "Dune Messiah".
+    """
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    smaller, larger = (a, b) if len(a) <= len(b) else (b, a)
+    if len(smaller) >= 2 and smaller <= larger:
+        return True
+    return len(a & b) / len(a | b) >= 0.7
+
+
+def find_book_match(
+    library_path: str,
+    title: str,
+    author: Optional[str] = None,
+    isbn: Optional[str] = None,
+) -> Optional[int]:
+    """Return the Calibre book id that best matches the given metadata, or None.
+
+    Matches on ISBN identifier first, then on normalized title tokens with an
+    author-name tie-breaker. Scans the whole library (cheap for typical sizes).
+    """
+    conn = _connect(library_path)
+    try:
+        if isbn:
+            digits = "".join(c for c in isbn if c.isdigit() or c in "xX")
+            if digits:
+                row = conn.execute(
+                    "SELECT book FROM identifiers WHERE type IN ('isbn','isbn13','isbn10') "
+                    "AND lower(replace(replace(val,'-',''),' ','')) = ? LIMIT 1",
+                    (digits.lower(),),
+                ).fetchone()
+                if row:
+                    return int(row["book"])
+
+        want_title = _title_tokens(title)
+        if not want_title:
+            return None
+        want_author = {w for w in _norm(author or "").split() if len(w) > 1}
+
+        rows = conn.execute(
+            """
+            SELECT b.id AS id, b.title AS title, b.author_sort AS author_sort,
+                   (SELECT GROUP_CONCAT(a.name, ' ')
+                      FROM books_authors_link bal JOIN authors a ON a.id = bal.author
+                     WHERE bal.book = b.id) AS authors
+              FROM books b
+            """
+        ).fetchall()
+
+        best_id: Optional[int] = None
+        best_score = -1.0
+        for row in rows:
+            cand_title = _title_tokens(row["title"] or "")
+            if not _titles_match(want_title, cand_title):
+                continue
+
+            cand_auth = {
+                w for w in _norm(f"{row['authors'] or ''} {row['author_sort'] or ''}").split()
+                if len(w) > 1
+            }
+            author_score = 0.0
+            if want_author and cand_auth:
+                author_score = len(want_author & cand_auth) / len(want_author)
+                # A title-only match with a clearly different author is not it.
+                if author_score == 0 and len(want_title) < 3:
+                    continue
+
+            score = len(want_title & cand_title) / max(len(want_title | cand_title), 1) + author_score
+            if score > best_score:
+                best_score = score
+                best_id = int(row["id"])
+        return best_id
+    finally:
+        conn.close()
+
+
+def pick_format(library_path: str, book_id: int, want: str) -> Optional[str]:
+    """Return the best available format name for a book given a desired kind.
+
+    ``want`` is "ebook" or "audiobook". Returns None if nothing suitable exists.
+    """
+    conn = _connect(library_path)
+    try:
+        rows = conn.execute(
+            "SELECT format FROM data WHERE book = ?", (book_id,)
+        ).fetchall()
+    finally:
+        conn.close()
+    available = {r["format"].upper() for r in rows if r["format"]}
+    if not available:
+        return None
+    preference = (
+        AUDIOBOOK_FORMAT_PREFERENCE if want == "audiobook" else EBOOK_FORMAT_PREFERENCE
+    )
+    for fmt in preference:
+        if fmt in available:
+            return fmt
+    # Fall back to any format that is not obviously the wrong kind.
+    other = set(AUDIOBOOK_FORMAT_PREFERENCE if want != "audiobook" else EBOOK_FORMAT_PREFERENCE)
+    for fmt in sorted(available):
+        if fmt not in other:
+            return fmt
+    return None
+
+
 def format_file(
     library_path: str, book_id: int, fmt: str
 ) -> Optional[tuple[str, str, str]]:

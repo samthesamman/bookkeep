@@ -339,14 +339,197 @@ async def run_background_refresh():
         logger.debug("background_refresh_sleeping", interval_seconds=interval)
         await asyncio.sleep(interval)
 
+# An ebook download that never shows up in Calibre is marked imported anyway
+# after this long, so requests don't hang forever on a misconfigured library.
+EBOOK_LIBRARY_WAIT_TIMEOUT = timedelta(days=7)
+
+
+def reconcile_ebook_library_imports(db: Session) -> int:
+    """Promote completed ebook downloads to 'imported' once Calibre has indexed them.
+
+    The orchestrator parks ebook imports in 'awaiting_library' when a Calibre
+    library is configured; this checks that library for each one and flips it to
+    'imported' (also marking the book available). Returns the number promoted.
+    """
+    from app.models import DownloadTask
+    from app.routers.calibre import get_active_library_path
+    from app.services import calibre_service
+
+    tasks = (
+        db.query(DownloadTask)
+        .filter(
+            DownloadTask.format == "ebook",
+            DownloadTask.state.in_(["complete", "seeding"]),
+            DownloadTask.import_status == "awaiting_library",
+        )
+        .all()
+    )
+    if not tasks:
+        return 0
+
+    library_path = get_active_library_path(db)
+
+    now = datetime.now(timezone.utc)
+    promoted = 0
+    for task in tasks:
+        found = False
+        if library_path:
+            book = task.book
+            if book:
+                try:
+                    match_id = calibre_service.find_book_match(
+                        library_path, book.title, book.author, book.isbn
+                    )
+                    found = match_id is not None
+                except calibre_service.CalibreError as exc:
+                    logger.warning("ebook_library_reconcile_lookup_failed", task_id=task.id, error=str(exc))
+                    continue
+
+        timed_out = False
+        if not found:
+            completed_at = task.completed_at or task.updated_at or task.created_at
+            if completed_at is not None and completed_at.tzinfo is None:
+                completed_at = completed_at.replace(tzinfo=timezone.utc)
+            if completed_at is not None and (now - completed_at) >= EBOOK_LIBRARY_WAIT_TIMEOUT:
+                timed_out = True
+
+        if not found and not timed_out:
+            continue
+
+        task.import_status = "imported"
+        task.imported_at = now
+        task.import_message = (
+            "Indexed by Calibre" if found
+            else "Marked imported after waiting for the Calibre library"
+        )
+        if task.book:
+            task.book.ebook_available = True
+        promoted += 1
+        logger.info(
+            "ebook_import_confirmed",
+            task_id=task.id,
+            book_id=task.book_id,
+            reason="calibre" if found else "timeout",
+        )
+
+    if promoted:
+        db.commit()
+        logger.info("reconcile_ebook_library_imports_complete", promoted=promoted, checked=len(tasks))
+    return promoted
+
+
 async def check_processing_requests():
     """Background task to check Booklore and update processing requests"""
     from app.routers.requests import update_processing_requests_status
     db: Session = SessionLocal()
     try:
+        reconcile_ebook_library_imports(db)
         await update_processing_requests_status(db)
     except Exception as e:
         logger.error("check_processing_requests_error", error=str(e))
+    finally:
+        db.close()
+
+
+# Give up auto-emailing a request after this many failed SMTP attempts.
+MAX_AUTO_EMAIL_ATTEMPTS = 5
+
+
+async def send_availability_emails():
+    """Email downloaded book files to users who asked for them when requesting.
+
+    Picks up requests flagged ``auto_email_when_available`` that have reached
+    ``available`` status, finds the matching file in the Calibre library and
+    sends it to the user's delivery address. Retries across runs until the file
+    turns up in the library or the SMTP attempts are exhausted.
+    """
+    from app.models import BookRequest
+    from app.routers.calibre import get_active_library_path
+    from app.services import calibre_service
+    from app.services.email_service import send_book_email, get_smtp_config, EmailError
+
+    db: Session = SessionLocal()
+    try:
+        pending = (
+            db.query(BookRequest)
+            .filter(
+                BookRequest.auto_email_when_available.is_(True),
+                BookRequest.auto_email_sent_at.is_(None),
+                BookRequest.status == "available",
+            )
+            .all()
+        )
+        if not pending:
+            return
+
+        if not get_smtp_config(db).configured:
+            logger.info("send_availability_emails_skipped_no_smtp", pending=len(pending))
+            return
+
+        library_path = get_active_library_path(db)
+        if not library_path:
+            logger.info("send_availability_emails_skipped_no_calibre", pending=len(pending))
+            return
+
+        sent = 0
+        for req in pending:
+            user = req.user
+            book = req.book
+            if not user or not book or not (user.book_delivery_email or "").strip():
+                continue
+
+            try:
+                match_id = calibre_service.find_book_match(
+                    library_path, book.title, book.author, book.isbn
+                )
+            except calibre_service.CalibreError as exc:
+                logger.warning("availability_email_match_failed", request_id=req.id, error=str(exc))
+                continue
+
+            if match_id is None:
+                # Not in the library yet — try again on a later run.
+                continue
+
+            fmt = calibre_service.pick_format(library_path, match_id, req.format)
+            if not fmt:
+                continue
+
+            file_result = calibre_service.format_file(library_path, match_id, fmt)
+            if file_result is None:
+                continue
+            path, download_name, media_type = file_result
+
+            req.auto_email_attempts = (req.auto_email_attempts or 0) + 1
+            try:
+                send_book_email(
+                    db,
+                    user,
+                    file_path=path,
+                    download_name=download_name,
+                    media_type=media_type,
+                    book_title=book.title,
+                    book_format=fmt,
+                )
+                req.auto_email_sent_at = datetime.now(timezone.utc)
+                sent += 1
+                logger.info("availability_email_sent", request_id=req.id, user_id=user.id, book_id=book.id)
+            except EmailError as exc:
+                logger.warning(
+                    "availability_email_failed",
+                    request_id=req.id,
+                    attempt=req.auto_email_attempts,
+                    error=str(exc),
+                )
+                if req.auto_email_attempts >= MAX_AUTO_EMAIL_ATTEMPTS:
+                    req.auto_email_sent_at = datetime.now(timezone.utc)
+                    logger.error("availability_email_gave_up", request_id=req.id)
+            db.commit()
+
+        if sent:
+            logger.info("send_availability_emails_complete", sent=sent, pending=len(pending))
+    except Exception as e:
+        logger.error("send_availability_emails_error", error=str(e))
+        db.rollback()
     finally:
         db.close()
 

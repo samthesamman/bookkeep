@@ -26,6 +26,7 @@ DEFAULT_JOBS = {
     "sync_from_audiobookshelf": {"interval_seconds": 24 * 60 * 60, "type": "PROCESS"},
     "sync_missing_metadata": {"interval_seconds": 6 * 60 * 60, "type": "PROCESS"},
     "sync_hardcover_lists": {"interval_seconds": 6 * 60 * 60, "type": "PROCESS"},
+    "send_availability_emails": {"interval_seconds": 5 * 60, "type": "PROCESS"},
 }
 
 # Available interval options (in seconds) for the dropdown
@@ -252,7 +253,7 @@ async def run_job(
     run_job_now(job_name)
     
     # Import job functions for the background task wrapper
-    from app.tasks import refresh_seed_data, check_processing_requests, sync_from_booklore, sync_from_audiobookshelf, sync_missing_metadata
+    from app.tasks import refresh_seed_data, check_processing_requests, sync_from_booklore, sync_from_audiobookshelf, sync_missing_metadata, sync_hardcover_lists, send_availability_emails
 
     job_functions = {
         "refresh_seed_data": refresh_seed_data,
@@ -260,6 +261,8 @@ async def run_job(
         "sync_from_booklore": sync_from_booklore,
         "sync_from_audiobookshelf": sync_from_audiobookshelf,
         "sync_missing_metadata": sync_missing_metadata,
+        "sync_hardcover_lists": sync_hardcover_lists,
+        "send_availability_emails": send_availability_emails,
     }
     
     job_func = job_functions.get(job_name)

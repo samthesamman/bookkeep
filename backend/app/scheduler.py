@@ -53,6 +53,11 @@ JOB_DEFINITIONS = {
         "description": "Sync Hardcover to-read/list books and auto-request them",
         "type": "PROCESS",
     },
+    "send_availability_emails": {
+        "default_interval": 5 * 60,  # 5 minutes
+        "description": "Email available books to users who opted in when requesting",
+        "type": "PROCESS",
+    },
 }
 
 
@@ -299,6 +304,7 @@ async def initialize_jobs():
         sync_missing_metadata,
         sync_download_states,
         sync_hardcover_lists,
+        send_availability_emails,
     )
 
     # Map job names to their async functions
@@ -310,6 +316,7 @@ async def initialize_jobs():
         "sync_missing_metadata": sync_missing_metadata,
         "sync_download_states": sync_download_states,
         "sync_hardcover_lists": sync_hardcover_lists,
+        "send_availability_emails": send_availability_emails,
     }
     
     db = SessionLocal()

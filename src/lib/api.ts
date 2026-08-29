@@ -352,7 +352,7 @@ export const requestsApi = {
   getById: (id: number) =>
     apiRequest<any>(`/api/requests/${id}`),
 
-  create: (request: { book_id: number; format: string; notes?: string; edition_id?: number }) =>
+  create: (request: { book_id: number; format: string; notes?: string; edition_id?: number; auto_email_when_available?: boolean }) =>
     apiRequest<any>('/api/requests/', {
       method: 'POST',
       body: JSON.stringify(request),

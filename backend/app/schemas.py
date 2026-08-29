@@ -117,6 +117,7 @@ class BookRequestBase(BaseModel):
     format: str
     notes: Optional[str] = None
     edition_id: Optional[int] = None
+    auto_email_when_available: Optional[bool] = False
 
 class BookRequestCreate(BookRequestBase):
     pass
@@ -141,6 +142,8 @@ class BookRequestResponse(BaseModel):
     readarr_search_status_code: Optional[int] = None
     readarr_message: Optional[str] = None
     edition_id: Optional[int] = None
+    auto_email_when_available: Optional[bool] = False
+    auto_email_sent_at: Optional[datetime] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
     book: Optional[BookResponse] = None

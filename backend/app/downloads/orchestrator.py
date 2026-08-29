@@ -22,10 +22,20 @@ from . import (
     list_sources,
     list_handlers,
 )
-from ..models import Book, DownloadTask, AppSettings, DownloadClient, DirectDownloadSettings
+from ..models import Book, DownloadTask, AppSettings, DownloadClient, DirectDownloadSettings, CalibreSettings
 from ..database import SessionLocal
 
 logger = structlog.get_logger()
+
+
+def _calibre_library_active(db: Session) -> bool:
+    """True when a Calibre library is configured and enabled.
+
+    Ebook imports wait for the file to show up in that library before they are
+    considered 'imported'; without a library there is nothing to wait for.
+    """
+    row = db.query(CalibreSettings).first()
+    return bool(row and row.enabled and row.library_path)
 
 
 class DownloadOrchestrator:
@@ -442,8 +452,6 @@ class DownloadOrchestrator:
         Returns:
             Destination path if successful, None otherwise
         """
-        from datetime import datetime, timezone
-
         # Mark import as starting
         task.import_status = 'importing'
         task.import_message = 'Starting import...'
@@ -507,11 +515,10 @@ class DownloadOrchestrator:
                     dest_path=str(dest_path),
                     message="Destination already exists, skipping copy"
                 )
-                # Mark as imported (already exists)
-                task.import_status = 'imported'
-                task.import_message = f'File already exists at destination: {dest_path.name}'
-                task.imported_at = datetime.now(timezone.utc)
-                db.commit()
+                self._set_import_result(
+                    task, db,
+                    message=f'File already exists at destination: {dest_path.name}',
+                )
                 return str(dest_path)
 
             # Check if hardlinks are enabled — prefer format-specific setting,
@@ -591,11 +598,11 @@ class DownloadOrchestrator:
                         dest=str(dest_path)
                     )
 
-            # Mark import as successful
-            task.import_status = 'imported'
-            task.import_message = f'Successfully imported to: {dest_path.name}'
-            task.imported_at = datetime.now(timezone.utc)
-            db.commit()
+            # Mark import as successful (or awaiting the Calibre library for ebooks)
+            self._set_import_result(
+                task, db,
+                message=f'Successfully imported to: {dest_path.name}',
+            )
 
             return str(dest_path)
 
@@ -611,6 +618,26 @@ class DownloadOrchestrator:
             db.commit()
             return None
 
+    def _set_import_result(self, task: DownloadTask, db: Session, message: str) -> None:
+        """Record the outcome of a successful copy.
+
+        For ebooks, when a Calibre library is configured the task is parked in
+        'awaiting_library' until the file is indexed there (see
+        tasks.reconcile_ebook_library_imports). Audiobooks — and ebooks with no
+        Calibre library — are marked 'imported' immediately.
+        """
+        from datetime import datetime, timezone
+
+        if task.format == "ebook" and _calibre_library_active(db):
+            task.import_status = 'awaiting_library'
+            task.import_message = f'{message} — waiting for Calibre to index it'
+            task.imported_at = None
+        else:
+            task.import_status = 'imported'
+            task.import_message = message
+            task.imported_at = datetime.now(timezone.utc)
+        db.commit()
+
     def _update_book_availability(self, task: DownloadTask, db: Session):
         """
         Update book availability after successful download.
@@ -624,9 +651,12 @@ class DownloadOrchestrator:
             if not book:
                 return
 
-            # Update availability flags
+            # Update availability flags. For ebooks that are still waiting to be
+            # indexed by Calibre, hold off until the import is actually confirmed
+            # (reconcile_ebook_library_imports flips it and sets this flag then).
             if task.format == "ebook":
-                book.ebook_available = True
+                if task.import_status == "imported":
+                    book.ebook_available = True
             elif task.format == "audiobook":
                 book.audiobook_available = True
 

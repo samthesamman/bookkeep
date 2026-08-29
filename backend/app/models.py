@@ -107,6 +107,10 @@ class BookRequest(Base):
     readarr_search_triggered = Column(Boolean, nullable=True)  # Deprecated
     readarr_search_status_code = Column(Integer, nullable=True)  # Deprecated
     readarr_message = Column(Text, nullable=True)  # Deprecated
+    # Email the file to the requester's delivery address once it becomes available
+    auto_email_when_available = Column(Boolean, default=False, nullable=False)
+    auto_email_sent_at = Column(DateTime(timezone=True), nullable=True)
+    auto_email_attempts = Column(Integer, default=0, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
@@ -299,7 +303,7 @@ class DownloadTask(Base):
     info_hash = Column(String(64), nullable=True, index=True)
 
     # Import tracking
-    import_status = Column(String(20), server_default='pending', nullable=True)  # pending, importing, imported, failed, skipped
+    import_status = Column(String(20), server_default='pending', nullable=True)  # pending, importing, awaiting_library, imported, failed, skipped
     import_message = Column(String(500), nullable=True)  # Error message or status details
     imported_at = Column(DateTime(timezone=True), nullable=True)
 

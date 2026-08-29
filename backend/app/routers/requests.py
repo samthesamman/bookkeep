@@ -106,6 +106,11 @@ async def create_request(
     elif request.format == "audiobook" and current_user.auto_approve_audiobooks:
         auto_approve = True
     
+    # Only honour the "email me when available" flag if the user has an address set.
+    auto_email = bool(request.auto_email_when_available) and bool(
+        (current_user.book_delivery_email or "").strip()
+    )
+
     # Create or re-open request with appropriate initial status
     initial_status = "approved" if auto_approve else "pending"
     if existing_request and existing_request.status == "not_found":
@@ -113,6 +118,9 @@ async def create_request(
         db_request.notes = request.notes
         db_request.admin_notes = None
         db_request.edition_id = request.edition_id
+        db_request.auto_email_when_available = auto_email
+        db_request.auto_email_sent_at = None
+        db_request.auto_email_attempts = 0
         db_request.updated_at = datetime.now(timezone.utc)
         db.add(db_request)
         db.commit()
@@ -124,7 +132,8 @@ async def create_request(
             format=request.format,
             notes=request.notes,
             status=initial_status,
-            edition_id=request.edition_id
+            edition_id=request.edition_id,
+            auto_email_when_available=auto_email,
         )
         db.add(db_request)
         db.commit()
@@ -839,15 +848,23 @@ async def update_processing_requests_status(db: Session) -> None:
     """Background task to check DownloadTask table and update processing requests."""
     try:
         from sqlalchemy.orm import joinedload
+        from app.routers.calibre import get_active_library_path
+        from app.services import calibre_service
         not_found_after = timedelta(hours=6)
         now = datetime.now(timezone.utc)
 
-        # Get all processing requests
+        # Check open requests: "processing" ones can also time out to not_found,
+        # while "pending"/"approved" ones are only promoted when the book turns up.
         processing_requests = db.query(models.BookRequest).options(
             joinedload(models.BookRequest.book)
         ).filter(
-            models.BookRequest.status == "processing"
+            models.BookRequest.status.in_(["processing", "approved", "pending"])
         ).all()
+
+        # If a Calibre library is configured it is the source of truth for
+        # ebooks: a request is available as soon as the book is in that library,
+        # regardless of how it got there (download, manual add, side-load).
+        calibre_library_path = get_active_library_path(db)
 
         if not processing_requests:
             logger.debug("no_processing_requests_to_check")
@@ -861,11 +878,35 @@ async def update_processing_requests_status(db: Session) -> None:
                 logger.warning("request_missing_book", request_id=req.id)
                 continue
 
-            # Look for a completed + imported DownloadTask for this book+format
+            # Ebooks: if it's in the Calibre library now, it's available.
+            if req.format == "ebook" and calibre_library_path:
+                try:
+                    match_id = calibre_service.find_book_match(
+                        calibre_library_path, req.book.title, req.book.author, req.book.isbn
+                    )
+                except calibre_service.CalibreError as exc:
+                    logger.warning("request_calibre_lookup_failed", request_id=req.id, error=str(exc))
+                    match_id = None
+
+                if match_id is not None:
+                    req.status = "available"
+                    req.updated_at = now
+                    req.book.ebook_available = True
+                    db.add(req.book)
+                    updated_count += 1
+                    logger.info("request_marked_available",
+                              request_id=req.id,
+                              book_title=req.book.title,
+                              format=req.format,
+                              source="calibre_library")
+                    continue
+
+            # Look for a completed + imported DownloadTask for this book+format.
+            # "seeding" torrents have finished downloading — treat them as complete.
             completed_task = db.query(models.DownloadTask).filter(
                 models.DownloadTask.book_id == req.book_id,
                 models.DownloadTask.format == req.format,
-                models.DownloadTask.state == "complete",
+                models.DownloadTask.state.in_(["complete", "seeding"]),
                 models.DownloadTask.import_status == "imported",
             ).first()
 
@@ -886,6 +927,27 @@ async def update_processing_requests_status(db: Session) -> None:
                           book_title=req.book.title,
                           format=req.format,
                           task_id=completed_task.id)
+                continue
+
+            # A finished download that is still being imported (e.g. an ebook
+            # waiting to be indexed by Calibre) — leave the request processing.
+            pending_import = db.query(models.DownloadTask).filter(
+                models.DownloadTask.book_id == req.book_id,
+                models.DownloadTask.format == req.format,
+                models.DownloadTask.state.in_(["complete", "seeding"]),
+                models.DownloadTask.import_status.in_(["pending", "importing", "awaiting_library"]),
+            ).first()
+
+            if pending_import:
+                logger.debug("request_awaiting_import",
+                           request_id=req.id,
+                           book_title=req.book.title,
+                           import_status=pending_import.import_status)
+                continue
+
+            # Only "processing" requests fall through to the download/not_found
+            # checks below; pending/approved just wait for the book to appear.
+            if req.status != "processing":
                 continue
 
             # No completed task — check if we should mark as not_found

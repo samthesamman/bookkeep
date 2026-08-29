@@ -81,6 +81,21 @@ def _require_library(db: Session) -> str:
     return row.library_path
 
 
+def get_active_library_path(db: Session) -> Optional[str]:
+    """Return the configured, enabled, readable Calibre library path, or None.
+
+    Non-raising counterpart of ``_require_library`` for use by background jobs.
+    """
+    row = db.query(models.CalibreSettings).first()
+    if row is None or not row.enabled or not row.library_path:
+        return None
+    try:
+        calibre_service.resolve_db_path(row.library_path)
+    except calibre_service.CalibreError:
+        return None
+    return row.library_path
+
+
 # ---------------------------------------------------------------------------
 # Settings (admin only)
 # ---------------------------------------------------------------------------

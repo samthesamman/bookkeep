@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
-import { BookOpen, Headphones, CheckCircle, Clock, Loader2 } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { BookOpen, Headphones, CheckCircle, Clock, Loader2, Mail } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
@@ -11,10 +12,12 @@ import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
+import { Switch } from '@/components/ui/switch';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import { useMutation, useQueryClient, useQuery } from '@tanstack/react-query';
 import { requestsApi, booksApi } from '@/lib/api';
+import { useUser } from '@/contexts/UserContext';
 import type { Book } from '@/types/book';
 
 interface RequestDialogProps {
@@ -63,8 +66,11 @@ export function RequestDialog({
 }: RequestDialogProps) {
   const [selectedFormat, setSelectedFormat] = useState<FormatSelection | null>(null);
   const [notes, setNotes] = useState('');
+  const [autoEmail, setAutoEmail] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const queryClient = useQueryClient();
+  const { user } = useUser();
+  const deliveryEmail = user?.book_delivery_email || '';
 
   // Fetch existing requests for this book
   const { data: existingRequests, isLoading: isLoadingRequests } = useQuery({
@@ -104,6 +110,7 @@ export function RequestDialog({
   useEffect(() => {
     if (!open) {
       setNotes('');
+      setAutoEmail(false);
     }
   }, [open]);
 
@@ -153,6 +160,7 @@ export function RequestDialog({
         book_id: bookId,
         format: format,
         notes: notes || undefined,
+        auto_email_when_available: autoEmail && !!deliveryEmail,
       });
     },
   });
@@ -182,7 +190,9 @@ export function RequestDialog({
       queryClient.invalidateQueries({ queryKey: ['requests', 'by-hardcover'] });
 
       toast.success('Request submitted!', {
-        description: `Your ${formatLabel} request for "${book.title}" has been submitted.`,
+        description:
+          `Your ${formatLabel} request for "${book.title}" has been submitted.` +
+          (autoEmail && deliveryEmail ? ` We'll email it to ${deliveryEmail} when it's available.` : ''),
       });
 
       setNotes('');
@@ -322,6 +332,30 @@ export function RequestDialog({
                 rows={3}
               />
             </div>
+
+            {/* Auto-email when available */}
+            {deliveryEmail ? (
+              <div className="flex items-start justify-between gap-3 rounded-lg border border-border p-3">
+                <div className="space-y-0.5">
+                  <Label htmlFor="auto-email" className="flex items-center gap-2 text-foreground">
+                    <Mail className="h-4 w-4" />
+                    Email it to me when available
+                  </Label>
+                  <p className="text-xs text-muted-foreground">
+                    Sends the file to {deliveryEmail} once it lands in the library.
+                  </p>
+                </div>
+                <Switch id="auto-email" checked={autoEmail} onCheckedChange={setAutoEmail} />
+              </div>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                Set a delivery email under{' '}
+                <Link to="/settings" className="text-primary underline">
+                  Settings
+                </Link>{' '}
+                to have this book emailed to you when it becomes available.
+              </p>
+            )}
           </div>
         )}
 

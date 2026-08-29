@@ -142,6 +142,7 @@ function getImportStatusBadgeVariant(status?: string): 'default' | 'secondary' |
     case 'imported':
       return 'default';
     case 'importing':
+    case 'awaiting_library':
       return 'secondary';
     case 'failed':
       return 'destructive';
@@ -160,6 +161,7 @@ function getImportStatusIcon(status?: string) {
     case 'imported':
       return <CheckCircle className="h-4 w-4" />;
     case 'importing':
+    case 'awaiting_library':
       return <Loader2 className="h-4 w-4 animate-spin" />;
     case 'failed':
       return <XCircle className="h-4 w-4" />;
@@ -180,6 +182,8 @@ function getImportStatusLabel(status?: string): string {
       return 'Pending';
     case 'importing':
       return 'Importing';
+    case 'awaiting_library':
+      return 'Awaiting Library';
     case 'imported':
       return 'Imported';
     case 'failed':
@@ -599,7 +603,7 @@ export default function Downloads() {
                             </TooltipContent>
                           </Tooltip>
                         </TooltipProvider>
-                      ) : task.import_message && (task.import_status === 'imported' || task.import_status === 'importing') ? (
+                      ) : task.import_message && (task.import_status === 'imported' || task.import_status === 'importing' || task.import_status === 'awaiting_library') ? (
                         <TooltipProvider>
                           <Tooltip>
                             <TooltipTrigger asChild>

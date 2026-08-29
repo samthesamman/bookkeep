@@ -590,10 +590,12 @@ async def import_download(
             release_hash = compute_release_hash(task.download_url)
             add_release_hash_to_book(db, task.book_id, release_hash)
 
-            # Mark book as available now that import succeeded
+            # Mark book as available now that import succeeded. Ebooks awaiting
+            # Calibre indexing stay unavailable until reconcile confirms them.
             if book:
                 if task.format == "ebook":
-                    book.ebook_available = True
+                    if task.import_status == "imported":
+                        book.ebook_available = True
                 elif task.format == "audiobook":
                     book.audiobook_available = True
 
@@ -604,18 +606,25 @@ async def import_download(
             import os
             filename = os.path.basename(dest_path)
 
+            awaiting_library = task.import_status == "awaiting_library"
+
             logger.info(
                 "manual_import_success",
                 task_id=task_id,
                 book_title=book_title,
                 filename=filename,
                 dest_path=dest_path,
-                release_hash=release_hash
+                release_hash=release_hash,
+                awaiting_library=awaiting_library,
             )
+
+            message = f"Imported '{filename}' for {book_title}"
+            if awaiting_library:
+                message += " — waiting for Calibre to index it"
 
             return {
                 "success": True,
-                "message": f"Imported '{filename}' for {book_title}",
+                "message": message,
                 "destination_path": dest_path,
                 "filename": filename,
                 "book_title": book_title
