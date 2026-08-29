@@ -63,6 +63,14 @@ RUN chmod +x /app/entrypoint.sh
 
 # Set PYTHONPATH to include backend directory so imports work correctly
 ENV PYTHONPATH="/app/backend"
+ENV PYTHONDONTWRITEBYTECODE=1
+
+# Run as an unprivileged user. The default uid/gid (1000) can be overridden at
+# runtime with `user:` in docker-compose to match host bind-mount ownership.
+RUN groupadd -g 1000 app \
+    && useradd -m -u 1000 -g app app \
+    && chown -R app:app /app
+USER app
 
 # Expose port
 EXPOSE 8000

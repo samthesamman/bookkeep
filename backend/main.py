@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -10,6 +10,7 @@ import os
 
 from app.database import engine, Base
 from app.routers import users, books, hardcover, requests, settings, readarr, jobs, booklore, audiobookshelf, auth, download_settings, downloads, direct_downloads, oidc, hardcover_sync, calibre
+from app.auth import get_current_user
 from app import cache
 
 # Configure Python's standard logging to emit structlog-style console output.
@@ -97,19 +98,32 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# Configure CORS - allow all origins when serving static files
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# CORS. In the single-container deployment the frontend is served from the same
+# origin as the API, so no cross-origin access is needed. Set
+# BOOKKEEP_CORS_ORIGINS (comma-separated) only if you serve the frontend from a
+# different origin. Never use "*": it lets any website read API responses.
+_cors_origins = [o.strip() for o in os.getenv("BOOKKEEP_CORS_ORIGINS", "").split(",") if o.strip()]
+if _cors_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_cors_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
 # Include API routers FIRST (before static files) so API routes take precedence
 app.include_router(users.router, prefix="/api/users", tags=["users"])
-app.include_router(books.router, prefix="/api/books", tags=["books"])
-app.include_router(hardcover.router, prefix="/api/hardcover", tags=["hardcover"])
+# books and hardcover expose library data and proxy the Hardcover API using the
+# server's token, so every route in them requires an authenticated user.
+app.include_router(
+    books.router, prefix="/api/books", tags=["books"],
+    dependencies=[Depends(get_current_user)],
+)
+app.include_router(
+    hardcover.router, prefix="/api/hardcover", tags=["hardcover"],
+    dependencies=[Depends(get_current_user)],
+)
 app.include_router(requests.router, prefix="/api/requests", tags=["requests"])
 app.include_router(settings.router, prefix="/api/settings", tags=["settings"])
 app.include_router(readarr.router, prefix="/api/readarr", tags=["readarr"])
