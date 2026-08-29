@@ -1341,20 +1341,24 @@ async def sync_download_states():
 
 
 async def _sync_torrent_downloads(db: Session, tasks: list) -> int:
-    """Sync torrent download states from qBittorrent"""
+    """Sync torrent download states from the configured torrent client"""
     from app.models import DownloadClient
     from app.downloads.clients.qbittorrent import QBittorrentClient
+    from app.downloads.clients.transmission import TransmissionClient
 
     try:
-        # Get enabled qBittorrent client
+        # Get highest-priority enabled torrent client
         client_config = db.query(DownloadClient).filter(
-            DownloadClient.type == 'qbittorrent',
+            DownloadClient.protocol == 'torrent',
             DownloadClient.enabled == True
-        ).first()
+        ).order_by(DownloadClient.priority.desc()).first()
 
         if not client_config:
             logger.warning("sync_torrents_no_client")
             return 0
+
+        if client_config.type == 'transmission':
+            return await _sync_transmission_downloads(db, tasks, client_config)
 
         # Connect to client
         client = QBittorrentClient(
@@ -1427,6 +1431,78 @@ async def _sync_torrent_downloads(db: Session, tasks: list) -> int:
 
     except Exception as e:
         logger.error("sync_torrents_error", error=str(e))
+        return 0
+
+
+async def _sync_transmission_downloads(db: Session, tasks: list, client_config) -> int:
+    """Sync torrent download states from Transmission"""
+    from app.downloads.clients.transmission import TransmissionClient
+    from app.downloads import DownloadState
+
+    # Map normalized DownloadState -> our task.state string
+    state_map = {
+        DownloadState.DOWNLOADING: 'downloading',
+        DownloadState.SEEDING: 'seeding',
+        DownloadState.COMPLETE: 'complete',
+        DownloadState.PAUSED: 'paused',
+        DownloadState.CHECKING: 'checking',
+        DownloadState.QUEUED: 'queued',
+        DownloadState.ERROR: 'error',
+    }
+
+    try:
+        client = TransmissionClient(
+            host=client_config.host,
+            port=client_config.port,
+            username=client_config.username,
+            password=client_config.password,
+            use_ssl=client_config.use_ssl,
+            url_base=client_config.url_base,
+        )
+
+        if not client.test_connection():
+            logger.error("sync_transmission_connection_failed")
+            return 0
+
+        updated = 0
+        for task in tasks:
+            if not task.info_hash:
+                continue
+
+            status = client.get_download_status(task.info_hash)
+            client_state = status.get("client_state")
+            if not client_state:
+                # Torrent not found in Transmission - leave the task untouched
+                continue
+
+            old_state = task.state
+            old_client_state = task.client_state
+
+            progress = status.get("progress", 0.0)
+            new_state = state_map.get(status.get("state"), task.state)
+
+            task.state = new_state
+            task.client_state = client_state
+            task.progress = progress
+
+            if new_state == 'complete' and not task.completed_at:
+                task.completed_at = datetime.now(timezone.utc)
+
+            if old_state != task.state or old_client_state != task.client_state:
+                logger.info("sync_transmission_updated",
+                            task_id=task.id,
+                            old_state=old_state,
+                            new_state=task.state,
+                            old_client_state=old_client_state,
+                            new_client_state=task.client_state,
+                            progress=task.progress)
+                updated += 1
+
+        db.commit()
+        return updated
+
+    except Exception as e:
+        logger.error("sync_transmission_error", error=str(e))
         return 0
 
 

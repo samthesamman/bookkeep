@@ -222,6 +222,9 @@ export default function DownloadClientsSettings() {
     if (type === 'qbittorrent') {
       newPort = 8080;
       newProtocol = 'torrent';
+    } else if (type === 'transmission') {
+      newPort = 9091;
+      newProtocol = 'torrent';
     } else if (type === 'nzbget') {
       newPort = 6789;
       newProtocol = 'usenet';
@@ -237,6 +240,8 @@ export default function DownloadClientsSettings() {
     switch (type) {
       case 'qbittorrent':
         return 'qBittorrent';
+      case 'transmission':
+        return 'Transmission';
       case 'nzbget':
         return 'NZBGet';
       case 'sabnzbd':
@@ -342,6 +347,7 @@ export default function DownloadClientsSettings() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="qbittorrent">qBittorrent (Torrent)</SelectItem>
+                  <SelectItem value="transmission">Transmission (Torrent)</SelectItem>
                   <SelectItem value="nzbget">NZBGet (Usenet)</SelectItem>
                   <SelectItem value="sabnzbd">Sabnzbd (Usenet)</SelectItem>
                 </SelectContent>
@@ -397,8 +403,8 @@ export default function DownloadClientsSettings() {
               </p>
             </div>
 
-            {/* Username field: qBittorrent and NZBGet */}
-            {(form.type === 'qbittorrent' || form.type === 'nzbget') && (
+            {/* Username field: qBittorrent, Transmission and NZBGet */}
+            {(form.type === 'qbittorrent' || form.type === 'transmission' || form.type === 'nzbget') && (
               <div className="space-y-2">
                 <Label htmlFor="client-username" className="text-foreground">Username</Label>
                 <Input
@@ -411,8 +417,8 @@ export default function DownloadClientsSettings() {
               </div>
             )}
 
-            {/* Password field: qBittorrent and NZBGet */}
-            {(form.type === 'qbittorrent' || form.type === 'nzbget') && (
+            {/* Password field: qBittorrent, Transmission and NZBGet */}
+            {(form.type === 'qbittorrent' || form.type === 'transmission' || form.type === 'nzbget') && (
               <div className="space-y-2">
                 <Label htmlFor="client-password" className="text-foreground">
                   Password {editingClient ? '(leave blank to keep current)' : ''}

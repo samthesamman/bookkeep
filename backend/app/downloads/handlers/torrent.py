@@ -1,19 +1,29 @@
 """
 Torrent download handler.
 
-Handles torrent downloads using configured torrent clients (qBittorrent, etc.).
+Handles torrent downloads using configured torrent clients (qBittorrent,
+Transmission, etc.).
 """
 import time
-from typing import Optional, Callable
+from typing import Optional, Callable, Union
 from threading import Event
 import structlog
 
 from .. import DownloadHandler, DownloadStatus, DownloadState, register_handler
-from ..clients import QBittorrentClient
+from ..clients import QBittorrentClient, TransmissionClient
 from ...models import DownloadTask, DownloadClient
 from sqlalchemy.orm import Session
 
 logger = structlog.get_logger()
+
+# Union of supported torrent client implementations
+TorrentClient = Union[QBittorrentClient, TransmissionClient]
+
+# Maps a download client "type" to its implementation class
+TORRENT_CLIENT_CLASSES = {
+    "qbittorrent": QBittorrentClient,
+    "transmission": TransmissionClient,
+}
 
 
 @register_handler("torrent")
@@ -40,38 +50,52 @@ class TorrentHandler(DownloadHandler):
             db_session: Database session for looking up download clients
         """
         self.db_session = db_session
-        self._clients = {}  # Cache of initialized clients
+        self._clients = {}  # Cache of initialized clients, keyed by client type
 
-    def _get_client(self, task: DownloadTask) -> Optional[QBittorrentClient]:
+    def _get_client(self, task: DownloadTask) -> Optional[TorrentClient]:
         """
         Get or create a torrent client for the task.
+
+        If the task was already added via a specific client, that client type is
+        reused. Otherwise the highest-priority enabled torrent client is selected.
 
         Args:
             task: Download task
 
         Returns:
-            QBittorrentClient instance or None
+            Torrent client instance (qBittorrent or Transmission) or None
         """
         # If task has a specific client, use it
-        if task.client_download_id and task.client_type:
-            client_type = task.client_type
-        else:
-            client_type = "qbittorrent"  # Default
+        pinned_type = task.client_type if (task.client_download_id and task.client_type) else None
 
         # Check cache
-        if client_type in self._clients:
-            return self._clients[client_type]
+        if pinned_type and pinned_type in self._clients:
+            return self._clients[pinned_type]
 
         # Get client config from database
         if self.db_session:
             try:
-                client_config = self.db_session.query(DownloadClient).filter(
-                    DownloadClient.type == client_type,
+                query = self.db_session.query(DownloadClient).filter(
                     DownloadClient.protocol == "torrent",
                     DownloadClient.enabled == True
-                ).order_by(DownloadClient.priority.desc()).first()
+                )
+                if pinned_type:
+                    query = query.filter(DownloadClient.type == pinned_type)
+
+                client_config = query.order_by(DownloadClient.priority.desc()).first()
 
                 if client_config:
+                    client_type = client_config.type
+                    if client_type in self._clients:
+                        return self._clients[client_type]
+
+                    client_class = TORRENT_CLIENT_CLASSES.get(client_type)
+                    if client_class is None:
+                        logger.error(
+                            "torrent_unsupported_client_type", client_type=client_type
+                        )
+                        return None
+
                     # Parse path mappings
                     import json
                     path_mappings = {}
@@ -82,7 +106,7 @@ class TorrentHandler(DownloadHandler):
                             pass
 
                     # Initialize client with format-specific categories
-                    client = QBittorrentClient(
+                    client = client_class(
                         host=client_config.host,
                         port=client_config.port,
                         username=client_config.username,
@@ -102,7 +126,7 @@ class TorrentHandler(DownloadHandler):
             except Exception as e:
                 logger.error("torrent_get_client_failed", error=str(e))
 
-        # Fallback: try environment variables
+        # Fallback: try environment variables (qBittorrent only)
         try:
             import os
             client = QBittorrentClient(
@@ -114,12 +138,20 @@ class TorrentHandler(DownloadHandler):
                 category=os.getenv("QBITTORRENT_CATEGORY", "books"),
             )
 
-            self._clients[client_type] = client
+            self._clients["qbittorrent"] = client
             return client
 
         except Exception as e:
             logger.error("torrent_fallback_client_failed", error=str(e))
             return None
+
+    @staticmethod
+    def _client_type_name(client: TorrentClient) -> str:
+        """Resolve the DownloadClient.type string for a client instance."""
+        for type_name, client_class in TORRENT_CLIENT_CLASSES.items():
+            if isinstance(client, client_class):
+                return type_name
+        return "qbittorrent"
 
     def download(
         self,
@@ -250,7 +282,7 @@ class TorrentHandler(DownloadHandler):
                         db.close()
 
                 # Store client info in task
-                task.client_type = "qbittorrent"
+                task.client_type = self._client_type_name(client)
                 task.client_download_id = info_hash
 
                 logger.info("torrent_added", task_id=task.id, info_hash=info_hash)

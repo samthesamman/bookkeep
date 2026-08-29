@@ -15,7 +15,7 @@ from ..auth import require_admin
 from ..database import get_db
 from ..models import ProwlarrServer, DownloadClient
 from ..downloads.prowlarr import ProwlarrClient
-from ..downloads.clients import QBittorrentClient, NZBGetClient, SabnzbdClient
+from ..downloads.clients import QBittorrentClient, TransmissionClient, NZBGetClient, SabnzbdClient
 
 router = APIRouter()
 logger = structlog.get_logger()
@@ -72,7 +72,7 @@ class ProwlarrTestRequest(BaseModel):
 
 class DownloadClientCreate(BaseModel):
     name: str
-    type: str  # "qbittorrent", "nzbget", "sabnzbd"
+    type: str  # "qbittorrent", "transmission", "nzbget", "sabnzbd"
     protocol: str  # "torrent", "usenet"
     host: str
     port: int
@@ -481,8 +481,14 @@ def test_download_client(request: DownloadClientTestRequest, current_user: model
     """Test download client connection"""
     try:
         if request.protocol == "torrent":
-            if request.type == "qbittorrent":
-                client = QBittorrentClient(
+            if request.type in ("qbittorrent", "transmission"):
+                client_class = (
+                    QBittorrentClient if request.type == "qbittorrent" else TransmissionClient
+                )
+                client_label = (
+                    "qBittorrent" if request.type == "qbittorrent" else "Transmission"
+                )
+                client = client_class(
                     host=request.host,
                     port=request.port,
                     username=request.username,
@@ -494,7 +500,7 @@ def test_download_client(request: DownloadClientTestRequest, current_user: model
                 if not client.test_connection():
                     return {
                         "success": False,
-                        "error": "Connection failed - could not reach qBittorrent"
+                        "error": f"Connection failed - could not reach {client_label}"
                     }
 
                 # Get client info
