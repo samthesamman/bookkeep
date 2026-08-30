@@ -930,6 +930,33 @@ export interface AudiobookshelfTestResponse {
   libraries?: Array<{ id: string; name: string; mediaType: string }>;
 }
 
+export interface AudiobookshelfLibraryItem {
+  id: string;
+  title: string;
+  author: string | null;
+  narrator: string | null;
+  series: string | null;
+  isbn: string | null;
+  published_year: string | null;
+  description: string | null;
+  duration_seconds: number | null;
+  num_tracks: number | null;
+  has_cover: boolean;
+  added_at: number | null;
+  // Present when the item is already matched to a catalog book.
+  hardcover_id: number | null;
+  book_id: number | null;
+  ebook_available: boolean;
+  audiobook_available: boolean;
+}
+
+export interface AudiobookshelfResolveResponse {
+  hardcover_id: number;
+  book_id: number;
+  ebook_available: boolean;
+  audiobook_available: boolean;
+}
+
 export const audiobookshelfApi = {
   getAll: () =>
     apiRequest<Array<AudiobookshelfServer>>('/api/audiobookshelf/'),
@@ -962,6 +989,20 @@ export const audiobookshelfApi = {
 
   getItems: (serverId: number) =>
     apiRequest<Array<any>>(`/api/audiobookshelf/${serverId}/items`),
+
+  // Every item in the default Audiobookshelf library (any signed-in user).
+  getLibraryItems: () =>
+    apiRequest<Array<AudiobookshelfLibraryItem>>('/api/audiobookshelf/library/items'),
+
+  coverDataUrl: (itemId: string) =>
+    authedDataUrl(`/api/audiobookshelf/library/items/${encodeURIComponent(itemId)}/cover`),
+
+  // Match an ABS item to a catalog book (creating one via Hardcover if needed)
+  // so the UI can open its details page.
+  resolveItem: (itemId: string) =>
+    apiRequest<AudiobookshelfResolveResponse>(
+      `/api/audiobookshelf/library/items/${encodeURIComponent(itemId)}/resolve`,
+    ),
 };
 
 // Download Settings API endpoints

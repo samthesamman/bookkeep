@@ -1,5 +1,7 @@
 """Audiobookshelf API integration for audiobook availability"""
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import Response
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from typing import Optional, Dict, Any, List
 import httpx
@@ -171,6 +173,231 @@ async def get_all_audiobookshelf_items(server: models.AudiobookshelfServer) -> L
 
 
 # API Endpoints
+
+
+def _normalize_abs_item(item: Dict[str, Any]) -> Dict[str, Any]:
+    """Flatten an Audiobookshelf library item into the shape the UI needs."""
+    media = item.get("media", {}) or {}
+    metadata = media.get("metadata", {}) or {}
+    return {
+        "id": item.get("id"),
+        "title": metadata.get("title") or "Unknown Title",
+        "author": metadata.get("authorName") or None,
+        "narrator": metadata.get("narratorName") or None,
+        "series": metadata.get("seriesName") or None,
+        "isbn": metadata.get("isbn") or None,
+        "published_year": metadata.get("publishedYear") or None,
+        "description": metadata.get("description") or None,
+        "duration_seconds": media.get("duration"),
+        "num_tracks": media.get("numTracks"),
+        "has_cover": bool(media.get("coverPath")),
+        "added_at": item.get("addedAt"),
+        # Filled in from the local catalog when we already know the book.
+        "hardcover_id": None,
+        "book_id": None,
+        "ebook_available": False,
+        "audiobook_available": False,
+    }
+
+
+def _match_local_book(entry: Dict[str, Any], db: Session) -> Optional[models.Book]:
+    """Find the catalog Book for an Audiobookshelf item (abs id → ISBN → title+author)."""
+    book = None
+    if entry.get("id"):
+        book = db.query(models.Book).filter(
+            models.Book.audiobookshelf_id == entry["id"]
+        ).first()
+    if not book and entry.get("isbn"):
+        book = db.query(models.Book).filter(models.Book.isbn == entry["isbn"]).first()
+    if not book and entry.get("title") and entry.get("author"):
+        book = db.query(models.Book).filter(
+            func.lower(models.Book.title) == entry["title"].lower(),
+            func.lower(models.Book.author) == entry["author"].lower(),
+        ).first()
+    return book
+
+
+# NOTE: keep the /library/* routes above the /{server_id} routes so
+# "library" isn't parsed as a server id.
+@router.get("/library/items")
+async def list_library_items(
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    """List every item in the default Audiobookshelf library (any signed-in user)."""
+    server = get_default_audiobookshelf_server(db)
+    if not server:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Audiobookshelf is not configured",
+        )
+
+    items = await get_all_audiobookshelf_items(server)
+    normalized = [_normalize_abs_item(item) for item in items if item.get("id")]
+
+    # Attach catalog info so the UI can deep-link straight to the book page for
+    # items we've already matched (the rest resolve lazily on click). Matching
+    # is batched: one pass over the catalog builds abs-id / ISBN / title+author
+    # indexes instead of querying per item.
+    by_abs_id: Dict[str, models.Book] = {}
+    by_isbn: Dict[str, models.Book] = {}
+    by_title_author: Dict[tuple, models.Book] = {}
+    for book in db.query(
+        models.Book.id,
+        models.Book.hardcover_id,
+        models.Book.title,
+        models.Book.author,
+        models.Book.isbn,
+        models.Book.audiobookshelf_id,
+        models.Book.ebook_available,
+        models.Book.audiobook_available,
+    ):
+        if book.audiobookshelf_id:
+            by_abs_id[book.audiobookshelf_id] = book
+        if book.isbn:
+            by_isbn.setdefault(book.isbn, book)
+        if book.title and book.author:
+            by_title_author.setdefault(
+                (book.title.lower(), book.author.lower()), book
+            )
+
+    for entry in normalized:
+        book = (
+            by_abs_id.get(entry["id"])
+            or (by_isbn.get(entry["isbn"]) if entry["isbn"] else None)
+            or (
+                by_title_author.get((entry["title"].lower(), entry["author"].lower()))
+                if entry["title"] and entry["author"]
+                else None
+            )
+        )
+        if book:
+            entry["hardcover_id"] = book.hardcover_id
+            entry["book_id"] = book.id
+            entry["ebook_available"] = bool(book.ebook_available)
+            entry["audiobook_available"] = bool(book.audiobook_available)
+
+    normalized.sort(key=lambda i: (i["title"] or "").lower())
+    return normalized
+
+
+async def _fetch_abs_item(server: models.AudiobookshelfServer, item_id: str) -> Optional[Dict[str, Any]]:
+    """Fetch a single expanded library item from Audiobookshelf."""
+    url = f"{server.url.rstrip('/')}/api/items/{item_id}"
+    try:
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True, verify=False) as client:
+            response = await client.get(url, headers=_auth_headers(server))
+    except httpx.RequestError as e:
+        logger.error("audiobookshelf_item_fetch_error", item_id=item_id, error=str(e))
+        return None
+    if response.status_code != 200:
+        return None
+    return response.json()
+
+
+@router.get("/library/items/{item_id}/resolve")
+async def resolve_library_item(
+    item_id: str,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    """
+    Resolve an Audiobookshelf item to a catalog book so the UI can open its
+    details page. Reuses an existing Book, or looks the title up on Hardcover
+    and creates one. The resulting book is linked to this abs item and marked
+    audiobook-available.
+    """
+    from app.routers.hardcover import lookup_book_by_title_author, _save_book_to_db
+
+    server = get_default_audiobookshelf_server(db)
+    if not server:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Audiobookshelf is not configured",
+        )
+
+    # Fast path: already linked.
+    book = db.query(models.Book).filter(
+        models.Book.audiobookshelf_id == item_id
+    ).first()
+
+    if not book:
+        raw = await _fetch_abs_item(server, item_id)
+        if not raw:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Item not found")
+        entry = _normalize_abs_item(raw)
+        book = _match_local_book(entry, db)
+
+        if not book:
+            hardcover_data = await lookup_book_by_title_author(
+                entry["title"], entry.get("author"), db
+            )
+            if not hardcover_data:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Couldn't match this audiobook to a Hardcover book",
+                )
+            book = _save_book_to_db(hardcover_data, db)
+            if not book:
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail="Failed to save the matched book",
+                )
+
+    book.audiobookshelf_id = item_id
+    book.audiobook_available = True
+    try:
+        db.commit()
+        db.refresh(book)
+    except Exception as e:
+        logger.warning("audiobookshelf_resolve_commit_failed", item_id=item_id, error=str(e))
+        db.rollback()
+
+    if not book.hardcover_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Matched book has no Hardcover ID",
+        )
+
+    return {
+        "hardcover_id": book.hardcover_id,
+        "book_id": book.id,
+        "ebook_available": bool(book.ebook_available),
+        "audiobook_available": bool(book.audiobook_available),
+    }
+
+
+@router.get("/library/items/{item_id}/cover")
+async def get_library_item_cover(
+    item_id: str,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    """Proxy an Audiobookshelf item cover so the browser never sees the API key."""
+    server = get_default_audiobookshelf_server(db)
+    if not server:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Audiobookshelf is not configured",
+        )
+
+    url = f"{server.url.rstrip('/')}/api/items/{item_id}/cover"
+    try:
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True, verify=False) as client:
+            response = await client.get(url, headers=_auth_headers(server))
+    except httpx.RequestError as e:
+        logger.error("audiobookshelf_cover_error", item_id=item_id, error=str(e))
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Audiobookshelf unreachable")
+
+    if response.status_code != 200:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Cover not found")
+
+    return Response(
+        content=response.content,
+        media_type=response.headers.get("content-type", "image/jpeg"),
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
 
 @router.get("/", response_model=List[schemas.AudiobookshelfServerResponse])
 async def list_servers(

@@ -121,6 +121,72 @@ def send_test_email(db: Session, recipient: str) -> None:
     logger.info("smtp_test_email_sent", recipient=recipient)
 
 
+def send_availability_notification(
+    db: Session,
+    user: models.User,
+    book_title: str,
+    book_format: str,
+) -> models.EmailLog:
+    """Tell the user a requested title is now available — no file attached.
+
+    Used for audiobooks (which we don't email as files) and any other case where
+    we only want to notify. Always writes an EmailLog row and returns it; raises
+    EmailError if the message could not be sent.
+    """
+    recipient = (user.book_delivery_email or "").strip()
+    label = (book_format or "book").strip() or "book"
+    subject = f'"{book_title}" is now available' if book_title else "Your request is now available"
+
+    log = models.EmailLog(
+        user_id=user.id,
+        recipient=recipient or "(not set)",
+        subject=subject,
+        book_title=book_title or None,
+        book_format=book_format or None,
+        status="success",
+    )
+
+    def _fail(msg: str) -> None:
+        log.status = "error"
+        log.error_message = msg
+        db.add(log)
+        db.commit()
+        db.refresh(log)
+        raise EmailError(msg)
+
+    if not recipient:
+        _fail("No delivery email address is set. Add one under Settings.")
+
+    config = get_smtp_config(db)
+    if not config.configured:
+        _fail("SMTP is not configured. Ask an administrator to set it up under Settings.")
+
+    message = EmailMessage()
+    message["Subject"] = subject
+    message["From"] = config.from_address
+    message["To"] = recipient
+    message.set_content(
+        f'Good news — the {label} "{book_title or "you requested"}" is now '
+        f'available in the library.'
+    )
+    try:
+        _deliver(config, message)
+    except EmailError as exc:
+        _fail(str(exc))
+
+    db.add(log)
+    db.commit()
+    db.refresh(log)
+    logger.info(
+        "availability_notification_sent",
+        user_id=user.id,
+        recipient=recipient,
+        book_title=book_title,
+        book_format=book_format,
+    )
+    return log
+
+
 def send_book_email(
     db: Session,
     user: models.User,

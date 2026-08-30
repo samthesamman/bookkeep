@@ -106,10 +106,10 @@ async def create_request(
     elif request.format == "audiobook" and current_user.auto_approve_audiobooks:
         auto_approve = True
     
-    # Only honour the "email me when available" flag if the user has an address set.
-    auto_email = bool(request.auto_email_when_available) and bool(
-        (current_user.book_delivery_email or "").strip()
-    )
+    # Store the user's "email me when available" intent as-is. Delivery is gated
+    # on a configured address at send time (see send_availability_emails), so a
+    # user who adds an address later still gets pending requests emailed.
+    auto_email = bool(request.auto_email_when_available)
 
     # Create or re-open request with appropriate initial status
     initial_status = "approved" if auto_approve else "pending"
