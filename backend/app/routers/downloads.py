@@ -76,19 +76,34 @@ def check_if_already_downloaded(db: Session, book_id: int, release_hash: str) ->
 
 
 def get_download_path(db: Session, format_type: str) -> Optional[str]:
-    """Get download path for a format type"""
+    """Resolve the save path for a download format.
+
+    Primary source is the highest-priority enabled torrent client's per-format
+    path ("Ebook Download Path" / "Audiobook Download Path"). Falls back to the
+    legacy ``{format}_download_path`` app setting / env var, which still backs
+    direct and usenet downloads.
+    """
+    client = (
+        db.query(DownloadClient)
+        .filter(DownloadClient.protocol == "torrent", DownloadClient.enabled == True)
+        .order_by(DownloadClient.priority.desc())
+        .first()
+    )
+    if client:
+        client_path = (
+            client.ebook_download_path if format_type == "ebook"
+            else client.audiobook_download_path
+        )
+        if client_path:
+            return client_path
+
     key = "ebook_download_path" if format_type == "ebook" else "audiobook_download_path"
     setting = db.query(AppSettings).filter(AppSettings.key == key).first()
     if setting and setting.value:
         return setting.value
-    # Check environment variable
+
     import os
-    env_key = key.upper()
-    logger.info(
-        "download path",
-        os.getenv(env_key)
-        )
-    return os.getenv(env_key)
+    return os.getenv(key.upper())
 
 
 # Pydantic models
@@ -312,7 +327,7 @@ async def start_download(
     if not download_path:
         raise HTTPException(
             status_code=400,
-            detail=f"Download path not configured for {request.format_type}. Please configure download paths in settings."
+            detail=f"No download path for {request.format_type}. Set the '{request.format_type.title()} Download Path' on your download client."
         )
 
     # Get the book
@@ -402,7 +417,7 @@ async def auto_download(
     if not download_path:
         raise HTTPException(
             status_code=400,
-            detail=f"Download path not configured for {format_type}. Please configure download paths in settings."
+            detail=f"No download path for {format_type}. Set the '{format_type.title()} Download Path' on your download client."
         )
 
     # Get the book

@@ -132,6 +132,8 @@ export default function DownloadClientsSettings() {
       category: 'books',
       ebook_category: 'books-ebook',
       audiobook_category: 'books-audiobook',
+      ebook_download_path: '',
+      audiobook_download_path: '',
     });
     setEditingClient(null);
     setTestResult(null);
@@ -560,8 +562,9 @@ export default function DownloadClientsSettings() {
                   </div>
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  Optional. When set, torrents are added with this save path based on the download format.
-                  Leave blank to use the torrent client's default.
+                  Torrents are added with this save path based on format. Ebooks stay here for
+                  Calibre to import; audiobooks are hardlinked from here into the Audiobook Media
+                  Path. Leave blank to use the client's default.
                 </p>
               </div>
             )}

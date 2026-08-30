@@ -1065,7 +1065,7 @@ async def create_request_hardlink(
     if not source_path or not os.path.exists(source_path):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Downloaded files are no longer on disk — cannot create the hardlink",
+            detail=f"Downloaded files are no longer on disk {str(source_path)} — cannot create the hardlink",
         )
 
     orchestrator = DownloadOrchestrator(db_session=db)

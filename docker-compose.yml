@@ -26,10 +26,9 @@ services:
     #   # Adjust the left side (host path) to match your download client's output directory.
     #   - /path/to/downloads:/downloads
     #   # Example: separate mounts for different media types
-      - cifs-cloud-books:/downloads/ebooks
-      - cifs-cloud-audiobooks:/downloads/audiobooks
+      - cifs-cloud-audiobooks:/data/torrents/audiobooks/managed/
       - cifs-cloud-calibre-dbs:/calibre
-      - cifs-cloud-data:/cloud-data
+      - cifs-cloud-data:/data
     ports:
       # Bind to loopback only. Put a TLS reverse proxy (Caddy/Traefik/nginx) in
       # front of this; do not expose 8000 directly to the LAN or internet.
@@ -50,8 +49,8 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
     # No host port: only the app container needs the database, over the internal
     # Docker network. Uncomment (loopback-bound) only for local admin access.
-    # ports:
-    #   - "127.0.0.1:5432:5432"
+    ports:
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     restart: unless-stopped
@@ -94,7 +93,7 @@ volumes:
     driver_opts:
       type: "cifs"
       o: "username=${SMB_USER},password=${SMB_PASSWORD},uid=1031,gid=65538,vers=3.0"
-      device: //10.102.1.11/data/torrents/audiobooks/unmanaged/
+      device: //10.102.1.11/data/torrents/audiobooks/managed/
   cifs-cloud-calibre-dbs:
     driver_opts:
       type: "cifs"

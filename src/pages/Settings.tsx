@@ -788,9 +788,7 @@ export default function Settings() {
   const isVisible = usePageVisibility();
   const [showHardcoverToken, setShowHardcoverToken] = useState(false);
   const [hardcoverToken, setHardcoverToken] = useState('');
-  const [ebookDownloadPath, setEbookDownloadPath] = useState('');
   const [audiobookDownloadPath, setAudiobookDownloadPath] = useState('');
-  const [useHardlinksEbook, setUseHardlinksEbook] = useState(true);
   const [useHardlinksAudiobook, setUseHardlinksAudiobook] = useState(true);
   const [clearingCache, setClearingCache] = useState<string | null>(null);
   const [showServerModal, setShowServerModal] = useState(false);
@@ -943,9 +941,7 @@ export default function Settings() {
   // Update download paths state when backend data loads
   useEffect(() => {
     if (downloadPaths) {
-      setEbookDownloadPath(downloadPaths.ebook_download_path || '');
       setAudiobookDownloadPath(downloadPaths.audiobook_download_path || '');
-      setUseHardlinksEbook(downloadPaths.use_hardlinks_ebook);
       setUseHardlinksAudiobook(downloadPaths.use_hardlinks_audiobook);
     }
   }, [downloadPaths]);
@@ -967,17 +963,15 @@ export default function Settings() {
   // Save download paths mutation
   const saveDownloadPathsMutation = useMutation({
     mutationFn: () => settingsApi.updateDownloadPaths({
-      ebook_download_path: ebookDownloadPath || undefined,
       audiobook_download_path: audiobookDownloadPath || undefined,
-      use_hardlinks_ebook: useHardlinksEbook,
       use_hardlinks_audiobook: useHardlinksAudiobook,
     }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['download-paths'] });
-      toast.success('Download paths saved!');
+      toast.success('Media paths saved!');
     },
     onError: (error: Error) => {
-      toast.error('Failed to save download paths', {
+      toast.error('Failed to save media paths', {
         description: error.message,
       });
     },
@@ -1706,29 +1700,16 @@ export default function Settings() {
 
           <NytBestsellersCard />
 
-          {/* Download Paths Settings */}
+          {/* Media Paths Settings */}
           <Card className="bg-card border-border">
             <CardHeader>
-              <CardTitle className="text-foreground">Download Paths</CardTitle>
+              <CardTitle className="text-foreground">Media Paths</CardTitle>
               <CardDescription>
-                Configure where eBooks and audiobooks should be downloaded
+                Where finished media is organized. Ebooks stay in their download client's
+                path; audiobooks are hardlinked into the Audiobook Media Path.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="ebook-path" className="text-foreground">
-                  eBook Download Path
-                </Label>
-                <DirectoryPicker
-                  id="ebook-path"
-                  placeholder="/path/to/ebooks"
-                  value={ebookDownloadPath}
-                  onChange={setEbookDownloadPath}
-                />
-                <p className="text-xs text-muted-foreground">
-                  The directory where eBooks will be downloaded
-                </p>
-              </div>
               <div className="space-y-2">
                 <Label htmlFor="audiobook-path" className="text-foreground">
                   Audiobook Media Path
@@ -1741,27 +1722,9 @@ export default function Settings() {
                 />
                 <p className="text-xs text-muted-foreground">
                   Audiobooks are imported here as{' '}
-                  <code>{'{Book Title}/{Author} - {Book Title} (01).mp3'}</code> — point this
-                  at your Audiobookshelf library folder
+                  <code>{'{Author}/{Book Title}/{Author} - {Book Title} (01).mp3'}</code> — point
+                  this at your Audiobookshelf library folder
                 </p>
-              </div>
-              <div className="flex items-center justify-between rounded-lg border border-border p-4">
-                <div className="space-y-0.5">
-                  <div className="flex items-center gap-2">
-                    <Link className="h-4 w-4 text-muted-foreground" />
-                    <Label htmlFor="use-hardlinks-ebook" className="text-foreground font-medium">
-                      Use hardlinks for ebooks
-                    </Label>
-                  </div>
-                  <p className="text-xs text-muted-foreground">
-                    Hardlink ebook files to the destination (saves disk space). Disable if you need independent copies, e.g. to write metadata before sending to an eReader.
-                  </p>
-                </div>
-                <Switch
-                  id="use-hardlinks-ebook"
-                  checked={useHardlinksEbook}
-                  onCheckedChange={setUseHardlinksEbook}
-                />
               </div>
               <div className="flex items-center justify-between rounded-lg border border-border p-4">
                 <div className="space-y-0.5">

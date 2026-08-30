@@ -462,7 +462,14 @@ class DownloadOrchestrator:
 
     def _copy_to_destination(self, task: DownloadTask, source_path: str, db: Session) -> Optional[str]:
         """
-        Copy or hardlink downloaded files to the configured destination path.
+        Post-process a completed download.
+
+        - **Ebooks** are left wherever the download client saved them (its
+          per-format "Ebook Download Path"); Calibre imports from that location.
+          Nothing is moved.
+        - **Audiobooks** are hardlinked/copied from the client's save path into
+          the configured "Audiobook Media Path" using an Audiobookshelf-style
+          layout (see :meth:`_import_audiobook`).
 
         Args:
             task: Download task
@@ -470,7 +477,7 @@ class DownloadOrchestrator:
             db: Database session
 
         Returns:
-            Destination path if successful, None otherwise
+            Final path if successful, None otherwise
         """
         # Mark import as starting
         task.import_status = 'importing'
@@ -478,155 +485,57 @@ class DownloadOrchestrator:
         db.commit()
 
         try:
-            # Get configured destination path based on format
-            setting_key = f"{task.format}_download_path"  # e.g., "ebook_download_path"
-            setting = db.query(AppSettings).filter(AppSettings.key == setting_key).first()
+            # Ebooks stay in the download client's path — no relocation step.
+            if task.format == "ebook":
+                self._set_import_result(
+                    task, db,
+                    message=f'Left in download client path: {Path(source_path).name}',
+                )
+                return source_path
+
+            # --- Audiobooks: import into the Audiobook Media Path ---
+            setting = db.query(AppSettings).filter(
+                AppSettings.key == "audiobook_download_path"
+            ).first()
 
             if not setting or not setting.value:
                 logger.warning(
                     "orchestrator_no_destination_configured",
                     task_id=task.id,
                     format=task.format,
-                    message=f"No destination path configured for {task.format}. Files will remain in download client location."
                 )
-                # Audiobooks can't be laid out without a media path — fail loudly
-                # rather than leaving the task stuck in 'importing' forever.
-                if task.format == "audiobook":
-                    task.import_status = 'failed'
-                    task.import_message = 'No Audiobook Media Path configured'
-                    db.commit()
-                    return None
-                return source_path
+                task.import_status = 'failed'
+                task.import_message = 'No Audiobook Media Path configured'
+                db.commit()
+                return None
 
             dest_base = setting.value
             if not os.path.exists(dest_base):
                 logger.error(
                     "orchestrator_destination_not_found",
                     task_id=task.id,
-                    dest_base=dest_base
+                    dest_base=dest_base,
                 )
-                # Mark import as failed
                 task.import_status = 'failed'
-                task.import_message = f'Destination path does not exist: {dest_base}'
+                task.import_message = f'Audiobook Media Path does not exist: {dest_base}'
                 db.commit()
                 return None
 
-            # Determine source file/folder
             source = Path(source_path)
             if not source.exists():
                 logger.error(
                     "orchestrator_source_not_found",
                     task_id=task.id,
-                    source=source_path
+                    source=source_path,
                 )
-                # Mark import as failed
                 task.import_status = 'failed'
                 task.import_message = f'Source file not found: {source_path}'
                 db.commit()
                 return None
 
-            # Audiobooks are laid out Audiobookshelf-style and only the audio
-            # files are carried over (see _import_audiobook).
-            if task.format == "audiobook":
-                return self._import_audiobook(
-                    task, source, dest_base, db, self._use_hardlinks(task, db)
-                )
-
-            # Determine destination name
-            if source.is_file():
-                dest_name = source.name
-                dest_path = Path(dest_base) / dest_name
-            else:
-                # It's a directory
-                dest_name = source.name
-                dest_path = Path(dest_base) / dest_name
-
-            # Check if destination already exists
-            if dest_path.exists():
-                logger.info(
-                    "orchestrator_destination_exists",
-                    task_id=task.id,
-                    dest_path=str(dest_path),
-                    message="Destination already exists, skipping copy"
-                )
-                self._set_import_result(
-                    task, db,
-                    message=f'File already exists at destination: {dest_path.name}',
-                )
-                return str(dest_path)
-
-            use_hardlinks = self._use_hardlinks(task, db)
-
-            if use_hardlinks:
-                # Try to hardlink first (fast, no extra space), fall back to copy
-                try:
-                    if source.is_file():
-                        os.link(str(source), str(dest_path))
-                        logger.info(
-                            "orchestrator_hardlink_success",
-                            task_id=task.id,
-                            source=str(source),
-                            dest=str(dest_path)
-                        )
-                    else:
-                        shutil.copytree(str(source), str(dest_path), copy_function=os.link)
-                        logger.info(
-                            "orchestrator_hardlink_dir_success",
-                            task_id=task.id,
-                            source=str(source),
-                            dest=str(dest_path)
-                        )
-                except (OSError, PermissionError) as e:
-                    # Hardlink failed (maybe cross-device), fall back to copy
-                    logger.info(
-                        "orchestrator_hardlink_failed_copying",
-                        task_id=task.id,
-                        error=str(e),
-                        message="Hardlink failed, falling back to copy"
-                    )
-
-                    if source.is_file():
-                        shutil.copy2(str(source), str(dest_path))
-                        logger.info(
-                            "orchestrator_copy_success",
-                            task_id=task.id,
-                            source=str(source),
-                            dest=str(dest_path)
-                        )
-                    else:
-                        shutil.copytree(str(source), str(dest_path))
-                        logger.info(
-                            "orchestrator_copy_dir_success",
-                            task_id=task.id,
-                            source=str(source),
-                            dest=str(dest_path)
-                        )
-            else:
-                # Hardlinks disabled, copy directly
-                if source.is_file():
-                    shutil.copy2(str(source), str(dest_path))
-                    logger.info(
-                        "orchestrator_copy_success",
-                        task_id=task.id,
-                        source=str(source),
-                        dest=str(dest_path)
-                    )
-                else:
-                    shutil.copytree(str(source), str(dest_path))
-                    logger.info(
-                        "orchestrator_copy_dir_success",
-                        task_id=task.id,
-                        source=str(source),
-                        dest=str(dest_path)
-                    )
-
-            # Mark import as successful (or awaiting the Calibre library for ebooks)
-            self._set_import_result(
-                task, db,
-                message=f'Successfully imported to: {dest_path.name}',
+            return self._import_audiobook(
+                task, source, dest_base, db, self._use_hardlinks(task, db)
             )
-
-            return str(dest_path)
 
         except Exception as e:
             logger.error(
@@ -666,7 +575,7 @@ class DownloadOrchestrator:
     ) -> Optional[str]:
         """Lay an audiobook download out Audiobookshelf-style under ``dest_base``:
 
-            {dest_base}/{Book Title}/{Author} - {Book Title}{ (NN)}{ext}
+            {dest_base}/{Author}/{Book Title}/{Author} - {Book Title}{ (NN)}{ext}
 
         Only audio files are carried over; a single-file book gets no ``(NN)``
         suffix, multi-file books are numbered in filename order, zero-padded.
@@ -702,7 +611,7 @@ class DownloadOrchestrator:
 
         title = _sanitize_path_component(book.title)
         author = _sanitize_path_component(book.author)
-        book_dir = Path(dest_base) / title
+        book_dir = Path(dest_base) / author / title
         book_dir.mkdir(parents=True, exist_ok=True)
 
         multi = len(tracks) > 1
