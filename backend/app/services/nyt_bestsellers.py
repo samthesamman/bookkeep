@@ -87,6 +87,35 @@ async def fetch_list_names() -> list[dict[str, Any]]:
     ]
 
 
+def _catalog_from_lists(lists: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Extract the {name, slug, updated} catalogue from list objects."""
+    return [
+        {
+            "list_name": item.get("list_name"),
+            "list_name_encoded": item.get("list_name_encoded"),
+            "display_name": item.get("display_name") or item.get("list_name"),
+            "updated": item.get("updated"),
+            "oldest_published_date": item.get("oldest_published_date"),
+            "newest_published_date": item.get("newest_published_date"),
+        }
+        for item in lists
+        if item.get("list_name_encoded")
+    ]
+
+
+async def fetch_list_catalog() -> list[dict[str, Any]]:
+    """Return the catalogue of selectable lists.
+
+    Tries ``names.json`` first; if that fails (commonly a transient 429), derives
+    the catalogue from the ``full-overview`` payload instead, which lists every
+    currently-published list with its display name and update cadence.
+    """
+    names = await fetch_list_names()
+    if names:
+        return names
+    return _catalog_from_lists(await fetch_full_overview())
+
+
 async def fetch_full_overview() -> list[dict[str, Any]]:
     """Return every current Best Sellers list with all of its books.
 

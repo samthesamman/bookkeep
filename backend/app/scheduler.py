@@ -68,6 +68,12 @@ JOB_DEFINITIONS = {
         "description": "Mark ebook requests available once they appear in the Calibre library",
         "type": "PROCESS",
     },
+    "sync_calibre_metadata": {
+        "default_interval": 24 * 60 * 60,  # 24 hours
+        "description": "Batch-fetch missing metadata for Calibre library books",
+        "type": "PROCESS",
+        "run_on_startup": True,
+    },
 }
 
 
@@ -316,6 +322,7 @@ async def initialize_jobs():
         sync_hardcover_lists,
         send_availability_emails,
         reconcile_calibre_library,
+        sync_calibre_metadata,
         refresh_nyt_bestsellers,
     )
 
@@ -330,6 +337,7 @@ async def initialize_jobs():
         "sync_hardcover_lists": sync_hardcover_lists,
         "send_availability_emails": send_availability_emails,
         "reconcile_calibre_library": reconcile_calibre_library,
+        "sync_calibre_metadata": sync_calibre_metadata,
         "refresh_nyt_bestsellers": refresh_nyt_bestsellers,
     }
     
@@ -355,6 +363,16 @@ async def initialize_jobs():
             func = job_functions.get(job_name)
             if func:
                 add_job(job_name, func, interval)
+                if definition.get("run_on_startup"):
+                    # Fire once shortly after boot, then fall back to the interval.
+                    try:
+                        get_scheduler().modify_job(
+                            job_name,
+                            next_run_time=datetime.now() + timedelta(seconds=30),
+                        )
+                        update_next_execution_in_db(job_name)
+                    except Exception as e:
+                        logger.warning("job_startup_run_failed", job_name=job_name, error=str(e))
                 logger.info("job_initialized", job_name=job_name, interval_seconds=interval)
         
         db.commit()

@@ -6,6 +6,7 @@ Calibre book so the "My Books" view can be enriched.
 """
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from typing import Iterable, Optional
 
 import structlog
@@ -164,6 +165,37 @@ def overlay_book_dict(
         out["description"] = _pick(book.description, out.get("description"), prefer_local)
 
     return out
+
+
+def books_missing_metadata(
+    db: Session, *, stale_days: int = 7, limit: Optional[int] = None
+) -> list[CalibreBookLink]:
+    """Links whose ``Book`` row is missing the metadata the overlay shows.
+
+    Selects a link when its Book has never been refreshed, or was refreshed more
+    than ``stale_days`` ago and still has a gap in description / cover / genres.
+    Never-refreshed rows come first so repeated capped runs make progress.
+    """
+    stale_before = datetime.now(timezone.utc) - timedelta(days=stale_days)
+    q = (
+        db.query(CalibreBookLink)
+        .join(Book, Book.id == CalibreBookLink.book_id)
+        .filter(
+            (Book.last_refreshed.is_(None))
+            | (
+                (Book.last_refreshed < stale_before)
+                & (
+                    Book.description.is_(None)
+                    | Book.cover_url.is_(None)
+                    | Book.genres.is_(None)
+                )
+            )
+        )
+        .order_by(Book.last_refreshed.asc())
+    )
+    if limit:
+        q = q.limit(limit)
+    return q.all()
 
 
 def sync_availability_flags(db: Session, library_path: str) -> int:

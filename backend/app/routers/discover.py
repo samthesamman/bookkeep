@@ -26,8 +26,9 @@ from app.routers.settings import get_setting_value, set_setting_value
 from app.services.nyt_bestsellers import (
     DEFAULT_LIST_SLUGS,
     NYT_ATTRIBUTION,
+    _catalog_from_lists,
     fetch_full_overview,
-    fetch_list_names,
+    fetch_list_catalog,
     get_nyt_api_key,
 )
 
@@ -36,7 +37,21 @@ logger = structlog.get_logger()
 router = APIRouter()
 
 BESTSELLERS_CACHE_KEY = "nyt_bestsellers:v1"
+CATALOG_CACHE_KEY = "nyt_list_catalog:v1"
 SELECTED_LISTS_SETTING = "nyt_bestseller_lists"
+
+
+async def get_list_catalog() -> list[dict]:
+    """Selectable NYT lists — Cache (7d) → NYT.  Empty when nothing could load."""
+    cached = await cache.get_cached(CATALOG_CACHE_KEY)
+    if cached:
+        return cached
+    catalog = await fetch_list_catalog()
+    if catalog:
+        await cache.set_cached(
+            CATALOG_CACHE_KEY, catalog, ttl=cache.CACHE_TTL["nyt_list_catalog"],
+        )
+    return catalog
 
 
 def get_selected_list_slugs(db: Session) -> list[str]:
@@ -68,6 +83,14 @@ async def build_bestsellers_payload(db: Session) -> schemas.NYTBestsellersRespon
     all_lists = await fetch_full_overview()
     if not all_lists:
         return empty
+
+    # Warm the catalogue cache off this call so the Settings picker never needs
+    # its own (rate-limited) NYT request.
+    catalog = _catalog_from_lists(all_lists)
+    if catalog:
+        await cache.set_cached(
+            CATALOG_CACHE_KEY, catalog, ttl=cache.CACHE_TTL["nyt_list_catalog"],
+        )
 
     lists_by_slug = {
         lst.get("list_name_encoded"): lst
@@ -150,7 +173,7 @@ async def get_nyt_lists(
     current_user: models.User = Depends(require_admin),
 ):
     """Catalogue of NYT lists plus the current selection (admin only)."""
-    available = await fetch_list_names()
+    available = await get_list_catalog()
     return schemas.NYTListsResponse(
         available=[schemas.NYTListName(**item) for item in available],
         selected=get_selected_list_slugs(db),
@@ -165,7 +188,7 @@ async def set_nyt_lists(
     current_user: models.User = Depends(require_admin),
 ):
     """Set which NYT lists appear on Discover, in order (admin only)."""
-    available = await fetch_list_names()
+    available = await get_list_catalog()
     if not available:
         raise HTTPException(
             status_code=400,

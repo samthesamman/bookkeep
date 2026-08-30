@@ -474,7 +474,7 @@ function NytBestsellersCard() {
   const queryClient = useQueryClient();
   const [selected, setSelected] = useState<string[]>([]);
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isFetching, refetch } = useQuery({
     queryKey: ['discover', 'nyt-lists'],
     queryFn: () => discoverApi.getNytLists(),
   });
@@ -543,9 +543,19 @@ function NytBestsellersCard() {
         {isLoading ? (
           <p className="text-sm text-muted-foreground">Loading lists…</p>
         ) : available.length === 0 ? (
-          <p className="text-sm text-muted-foreground">
-            No lists available. Check that the NYT Books API key is valid.
-          </p>
+          <div className="space-y-2">
+            <p className="text-sm text-muted-foreground">
+              {data?.has_nyt_key
+                ? 'Could not load the list catalogue right now — the NYT API is likely rate-limiting. It is cached for 7 days once it loads, so try again in a minute.'
+                : 'Set NYT_BOOKS_API_KEY to configure Best Sellers lists.'}
+            </p>
+            {data?.has_nyt_key && (
+              <Button size="sm" variant="outline" onClick={() => refetch()} disabled={isFetching}>
+                <RefreshCw className={`h-4 w-4 mr-2 ${isFetching ? 'animate-spin' : ''}`} />
+                Retry
+              </Button>
+            )}
+          </div>
         ) : (
           <>
             {renderGroup('Weekly', weekly)}

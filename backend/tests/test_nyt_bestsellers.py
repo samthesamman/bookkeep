@@ -75,6 +75,34 @@ class TestFetchListNames:
         assert await nyt.fetch_list_names() == []
 
 
+class TestFetchListCatalog:
+    @pytest.mark.asyncio
+    async def test_uses_names_when_available(self):
+        names_body = {"results": [
+            {"list_name": "Fiction", "list_name_encoded": "fiction", "updated": "WEEKLY"},
+        ]}
+        get = AsyncMock(return_value=_response(200, names_body))
+        with patch.object(nyt.httpx, "AsyncClient", _mock_async_client(get)):
+            catalog = await nyt.fetch_list_catalog()
+        assert [c["list_name_encoded"] for c in catalog] == ["fiction"]
+        assert get.await_count == 1  # no full-overview fallback needed
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_full_overview_on_names_failure(self):
+        overview_body = {"results": {"lists": [
+            {"list_name": "Fiction", "list_name_encoded": "fiction",
+             "display_name": "Fiction", "updated": "WEEKLY", "books": []},
+        ]}}
+        get = AsyncMock(side_effect=[
+            _response(429), _response(429),   # names.json + its one retry
+            _response(200, overview_body),    # full-overview.json
+        ])
+        with patch.object(nyt.httpx, "AsyncClient", _mock_async_client(get)), \
+             patch.object(nyt.asyncio, "sleep", AsyncMock()):
+            catalog = await nyt.fetch_list_catalog()
+        assert [c["list_name_encoded"] for c in catalog] == ["fiction"]
+
+
 class TestFetchFullOverview:
     @pytest.mark.asyncio
     async def test_returns_lists(self):

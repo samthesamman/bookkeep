@@ -144,6 +144,35 @@ def test_sync_availability_flags(db, library):
     assert cls.sync_availability_flags(db, library) == 0
 
 
+def test_books_missing_metadata_selects_unrefreshed_and_stale(db):
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+    fresh = _book(db, title="Fresh", description="d", cover_url="c", genres="g")
+    fresh.last_refreshed = now
+    never = _book(db, title="Never")
+    stale_gap = _book(db, title="StaleGap", cover_url="c", genres="g")  # no description
+    stale_gap.last_refreshed = now - timedelta(days=30)
+    stale_ok = _book(db, title="StaleComplete", description="d", cover_url="c", genres="g")
+    stale_ok.last_refreshed = now - timedelta(days=30)
+    db.commit()
+
+    for i, b in enumerate((fresh, never, stale_gap, stale_ok), start=1):
+        cls.upsert_link(db, calibre_book_id=i, book_id=b.id, source="fuzzy")
+
+    got = {l.book.title for l in cls.books_missing_metadata(db)}
+    assert got == {"Never", "StaleGap"}
+
+    # Never-refreshed first, and the limit is honored.
+    limited = cls.books_missing_metadata(db, limit=1)
+    assert len(limited) == 1 and limited[0].book.title == "Never"
+
+    # Unlinked books are never returned.
+    lonely = _book(db, title="Unlinked")
+    db.commit()
+    assert "Unlinked" not in {l.book.title for l in cls.books_missing_metadata(db)}
+
+
 def test_overlay_book_dict_fills_and_prefers(db):
     b = _book(
         db,

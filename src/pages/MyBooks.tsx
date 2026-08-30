@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import {
   Library,
   Search,
@@ -7,17 +7,10 @@ import {
   ChevronLeft,
   ChevronRight,
   BookOpen,
-  Loader2,
-  RefreshCw,
-  Link2,
-  Link2Off,
-  Sparkles,
 } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Sheet, SheetContent } from '@/components/ui/sheet';
 import {
   Select,
   SelectContent,
@@ -25,13 +18,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { toast } from 'sonner';
-import { Link, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { calibreApi, type CalibreBook, type CalibreSort } from '@/lib/api';
-import { CalibreFormatActions } from '@/components/books/CalibreFormatActions';
-import { CalibreRelinkDialog } from '@/components/books/CalibreRelinkDialog';
 import { formatRating } from '@/lib/utils';
-import { useUser } from '@/contexts/UserContext';
 
 const PAGE_SIZE = 60;
 
@@ -118,263 +107,12 @@ function CalibreBookCard({ book, onOpen }: { book: CalibreBook; onOpen: () => vo
   );
 }
 
-const LINK_SOURCE_LABEL: Record<string, string> = {
-  download: 'matched from your request',
-  manual: 'linked by hand',
-  fuzzy: 'auto-matched by title',
-};
-
-function BookDetailSheet({
-  bookId,
-  open,
-  onOpenChange,
-}: {
-  bookId: number | null;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-}) {
-  const [relinkOpen, setRelinkOpen] = useState(false);
-  const [busyLink, setBusyLink] = useState(false);
-  const queryClient = useQueryClient();
-  const { isAdmin } = useUser();
-
-  const { data: book, isLoading } = useQuery({
-    queryKey: ['calibre-book', bookId],
-    queryFn: () => calibreApi.getBook(bookId as number),
-    enabled: open && bookId != null,
-  });
-
-  const { data: coverUrl } = useQuery({
-    queryKey: ['calibre-cover', bookId],
-    queryFn: async () => URL.createObjectURL(await calibreApi.fetchCover(bookId as number)),
-    enabled: open && bookId != null && !!book?.has_cover && !book?.overlay_cover_url,
-    retry: false,
-  });
-
-  const displayCover = book?.overlay_cover_url || coverUrl;
-
-  const invalidate = () => {
-    queryClient.invalidateQueries({ queryKey: ['calibre-book', bookId] });
-    queryClient.invalidateQueries({ queryKey: ['calibre-books'] });
-    queryClient.invalidateQueries({ queryKey: ['calibre-cover', bookId] });
-  };
-
-  const handleRefresh = async () => {
-    if (bookId == null) return;
-    setBusyLink(true);
-    try {
-      await calibreApi.refreshMetadata(bookId);
-      toast.success('Metadata refreshed from Hardcover');
-      invalidate();
-    } catch (error) {
-      toast.error('Refresh failed', {
-        description: error instanceof Error ? error.message : undefined,
-      });
-    } finally {
-      setBusyLink(false);
-    }
-  };
-
-  const handleUnlink = async () => {
-    if (bookId == null) return;
-    setBusyLink(true);
-    try {
-      await calibreApi.clearLink(bookId);
-      toast.success('Reverted to Calibre metadata');
-      invalidate();
-    } catch (error) {
-      toast.error('Failed to unlink', {
-        description: error instanceof Error ? error.message : undefined,
-      });
-    } finally {
-      setBusyLink(false);
-    }
-  };
-
-  return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent className="w-full overflow-y-auto sm:max-w-2xl">
-        {isLoading || !book ? (
-          <div className="space-y-6">
-            <Skeleton className="h-8 w-3/4" />
-            <div className="flex gap-6">
-              <Skeleton className="h-48 w-32 rounded-lg" />
-              <div className="flex-1 space-y-3">
-                <Skeleton className="h-4 w-2/3" />
-                <Skeleton className="h-4 w-1/2" />
-                <Skeleton className="h-4 w-1/3" />
-              </div>
-            </div>
-            <Skeleton className="h-24 w-full" />
-          </div>
-        ) : (
-          <div className="space-y-6">
-            <div>
-              <h2 className="text-xl font-bold text-foreground">{book.title}</h2>
-              <p className="text-muted-foreground">{book.authors}</p>
-            </div>
-
-            {(book.metadata_source === 'overlay' || isAdmin) && (
-              <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-secondary/30 p-3 text-xs">
-                {book.metadata_source === 'overlay' ? (
-                  <>
-                    <Badge variant="outline" className="gap-1 border-primary/40 text-primary">
-                      <Sparkles className="h-3 w-3" />
-                      Enriched from Hardcover
-                    </Badge>
-                    <span className="text-muted-foreground">
-                      {book.link_source ? LINK_SOURCE_LABEL[book.link_source] : ''}
-                      {book.link_source === 'fuzzy' && !book.link_confirmed && isAdmin
-                        ? ' — change it if this is wrong'
-                        : ''}
-                    </span>
-                    {isAdmin && (
-                      <span className="ml-auto flex gap-1">
-                        <Button variant="ghost" size="sm" disabled={busyLink} onClick={handleRefresh}>
-                          <RefreshCw
-                            className={`mr-1 h-3.5 w-3.5 ${busyLink ? 'animate-spin' : ''}`}
-                          />
-                          Refresh
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          disabled={busyLink}
-                          onClick={() => setRelinkOpen(true)}
-                        >
-                          <Link2 className="mr-1 h-3.5 w-3.5" />
-                          Change
-                        </Button>
-                        <Button variant="ghost" size="sm" disabled={busyLink} onClick={handleUnlink}>
-                          <Link2Off className="mr-1 h-3.5 w-3.5" />
-                          Unlink
-                        </Button>
-                      </span>
-                    )}
-                  </>
-                ) : (
-                  <>
-                    <span className="text-muted-foreground">Metadata from Calibre only.</span>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="ml-auto"
-                      disabled={busyLink}
-                      onClick={() => setRelinkOpen(true)}
-                    >
-                      <Link2 className="mr-1 h-3.5 w-3.5" />
-                      Link a Hardcover book
-                    </Button>
-                  </>
-                )}
-              </div>
-            )}
-
-            <div className="flex gap-6">
-              <div className="h-48 w-32 shrink-0 overflow-hidden rounded-lg border border-border bg-muted">
-                {displayCover ? (
-                  <img src={displayCover} alt={book.title} className="h-full w-full object-cover" />
-                ) : (
-                  <div className="flex h-full w-full items-center justify-center">
-                    <BookOpen className="h-8 w-8 text-muted-foreground/50" />
-                  </div>
-                )}
-              </div>
-              <div className="flex-1 space-y-2 text-sm">
-                {book.series && (
-                  <p>
-                    <span className="text-muted-foreground">Series: </span>
-                    {book.series}
-                    {book.series_index ? ` #${Number(book.series_index)}` : ''}
-                  </p>
-                )}
-                {book.publisher && (
-                  <p>
-                    <span className="text-muted-foreground">Publisher: </span>
-                    {book.publisher}
-                  </p>
-                )}
-                {book.pubdate && (
-                  <p>
-                    <span className="text-muted-foreground">Published: </span>
-                    {book.pubdate.slice(0, 10)}
-                  </p>
-                )}
-                {book.page_count ? (
-                  <p>
-                    <span className="text-muted-foreground">Pages: </span>
-                    {book.page_count}
-                  </p>
-                ) : null}
-                {book.languages.length > 0 && (
-                  <p>
-                    <span className="text-muted-foreground">Language: </span>
-                    {book.languages.join(', ')}
-                  </p>
-                )}
-                {book.rating ? (
-                  <p className="inline-flex items-center gap-1 text-amber-500">
-                    <Star className="h-4 w-4 fill-amber-400 text-amber-400" />
-                    {formatRating(book.rating)}
-                  </p>
-                ) : null}
-                {Object.entries(book.identifiers).map(([type, val]) => (
-                  <p key={type}>
-                    <span className="text-muted-foreground uppercase">{type}: </span>
-                    {val}
-                  </p>
-                ))}
-              </div>
-            </div>
-
-            {(book.tags.length > 0 || (book.genres && book.genres.length > 0)) && (
-              <div className="flex flex-wrap gap-1.5">
-                {[...new Set([...(book.genres ?? []), ...book.tags])].map((tag) => (
-                  <Badge key={tag} variant="secondary" className="text-xs">
-                    {tag}
-                  </Badge>
-                ))}
-              </div>
-            )}
-
-            {book.description && (
-              <div
-                className="prose prose-sm prose-invert max-w-none text-sm text-muted-foreground [&_a]:text-primary"
-                dangerouslySetInnerHTML={{ __html: book.description }}
-              />
-            )}
-
-            {book.format_details.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No downloadable files for this book.</p>
-            ) : (
-              <CalibreFormatActions
-                calibreBookId={book.id}
-                formats={book.format_details}
-              />
-            )}
-          </div>
-        )}
-        {bookId != null && (
-          <CalibreRelinkDialog
-            calibreId={bookId}
-            open={relinkOpen}
-            onOpenChange={setRelinkOpen}
-            onLinked={invalidate}
-          />
-        )}
-      </SheetContent>
-    </Sheet>
-  );
-}
-
 export default function MyBooks() {
   const navigate = useNavigate();
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
   const [sort, setSort] = useState<CalibreSort>('added');
   const [page, setPage] = useState(1);
-  const [selectedId, setSelectedId] = useState<number | null>(null);
-  const [sheetOpen, setSheetOpen] = useState(false);
 
   // Debounce the search input.
   useEffect(() => {
@@ -487,14 +225,13 @@ export default function MyBooks() {
                 <CalibreBookCard
                   key={book.id}
                   book={book}
-                  onOpen={() => {
-                    if (book.hardcover_id) {
-                      navigate(`/book/${book.hardcover_id}`);
-                    } else {
-                      setSelectedId(book.id);
-                      setSheetOpen(true);
-                    }
-                  }}
+                  onOpen={() =>
+                    navigate(
+                      book.hardcover_id
+                        ? `/book/${book.hardcover_id}`
+                        : `/my-books/${book.id}`,
+                    )
+                  }
                 />
               ))}
             </div>
@@ -532,8 +269,6 @@ export default function MyBooks() {
           )}
         </>
       )}
-
-      <BookDetailSheet bookId={selectedId} open={sheetOpen} onOpenChange={setSheetOpen} />
     </div>
   );
 }

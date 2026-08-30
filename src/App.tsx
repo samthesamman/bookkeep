@@ -18,6 +18,7 @@ import NotFound from "@/pages/NotFound";
 // Lazy-load all other pages for code splitting
 const Discover = lazy(() => import("@/pages/Discover"));
 const MyBooks = lazy(() => import("@/pages/MyBooks"));
+const CalibreBookDetails = lazy(() => import("@/pages/CalibreBookDetails"));
 const Browse = lazy(() => import("@/pages/Browse"));
 const BookDetails = lazy(() => import("@/pages/BookDetails"));
 const Requests = lazy(() => import("@/pages/Requests"));
@@ -70,6 +71,7 @@ const App = () => (
                   <Route element={<AppLayout />}>
                     <Route path="/" element={<Discover />} />
                     <Route path="/my-books" element={<MyBooks />} />
+                    <Route path="/my-books/:id" element={<CalibreBookDetails />} />
                     <Route path="/browse/:category" element={<Browse />} />
                     <Route path="/book/:id" element={<BookDetails />} />
                     <Route path="/search" element={<SearchResults />} />

@@ -573,41 +573,29 @@ LINK_MAINTENANCE_INTERVAL = timedelta(minutes=10)
 _LAST_LINK_MAINTENANCE = datetime.min.replace(tzinfo=timezone.utc)
 
 
-async def _enrich_linked_calibre_books(db: Session) -> int:
+# Cap the daily/startup Calibre metadata sweep so one run cannot hammer the
+# Hardcover API for hours on a very large library. Whatever is left over is
+# picked up on the next run (and by the per-minute reconcile batch in between).
+CALIBRE_METADATA_SCAN_LIMIT = 400
+
+
+async def _enrich_calibre_metadata(db: Session, *, limit: int) -> int:
     """Fill in Hardcover metadata for linked Calibre books that are missing it.
 
-    Runs a small batch each minute (from reconcile_calibre_library). Targets
-    linked books with a gap in the fields the overlay shows — description, cover,
-    genres — or that have never been refreshed. Uses the full detail data path.
+    Shared by the per-minute reconcile pass (small batch) and the
+    ``sync_calibre_metadata`` job (full sweep). Targets linked books with a gap
+    in the fields the overlay shows — description, cover, genres — or that have
+    never been refreshed. Uses the full detail data path. Honors the overlay
+    toggle. One Hardcover lookup at a time with a short pause between books.
     """
-    from sqlalchemy import and_, or_
-    from app.models import Book, CalibreBookLink
     from app.routers.calibre import _bool_setting, OVERLAY_ENABLED_KEY
+    from app.services import calibre_link_service
     from app.services.hardcover_metadata import enrich_book_from_hardcover
 
     if not _bool_setting(db, OVERLAY_ENABLED_KEY, True):
         return 0
 
-    stale_before = datetime.now(timezone.utc) - timedelta(days=7)
-    rows = (
-        db.query(CalibreBookLink)
-        .join(Book, Book.id == CalibreBookLink.book_id)
-        .filter(
-            or_(
-                Book.last_refreshed.is_(None),
-                and_(
-                    Book.last_refreshed < stale_before,
-                    or_(
-                        Book.description.is_(None),
-                        Book.cover_url.is_(None),
-                        Book.genres.is_(None),
-                    ),
-                ),
-            )
-        )
-        .limit(CALIBRE_ENRICH_BATCH)
-        .all()
-    )
+    rows = calibre_link_service.books_missing_metadata(db, limit=limit)
     if not rows:
         return 0
 
@@ -620,7 +608,7 @@ async def _enrich_linked_calibre_books(db: Session) -> int:
             logger.warning("calibre_book_enrich_failed", book_id=book.id, error=str(exc))
             db.rollback()
             continue
-        # Stamp last_refreshed even on a no-op so we do not retry every minute.
+        # Stamp last_refreshed even on a no-op so we do not retry it every run.
         if book.last_refreshed is None:
             book.last_refreshed = datetime.now(timezone.utc)
         try:
@@ -635,6 +623,192 @@ async def _enrich_linked_calibre_books(db: Session) -> int:
     if enriched:
         logger.info("calibre_book_enrich_complete", enriched=enriched, checked=len(rows))
     return enriched
+
+
+async def _enrich_linked_calibre_books(db: Session) -> int:
+    """Per-minute slice of the Calibre metadata backfill (see sync_calibre_metadata)."""
+    return await _enrich_calibre_metadata(db, limit=CALIBRE_ENRICH_BATCH)
+
+
+async def _import_unlinked_calibre_books(
+    db: Session, library_path: str, *, limit: int
+) -> int:
+    """Resolve Calibre books that have no ``Book`` row at all against Hardcover.
+
+    ``backfill_fuzzy_links`` only links library books that already match a row in
+    our ``books`` table, so a side-loaded book we have never seen stays
+    "metadata from Calibre only" forever. This searches Hardcover by
+    title/author, and — when the returned title is a real match — creates the
+    ``Book`` row, links it, and enriches it. Bounded per run.
+    """
+    from app.routers.hardcover import lookup_book_by_title_author
+    from app.routers.settings import get_hardcover_token
+    from app.services import calibre_service, calibre_link_service
+    from app.services.hardcover_metadata import enrich_book_from_hardcover
+    from app.models import Book, CalibreBookLink
+
+    token, _src = get_hardcover_token(db)
+    if not token:
+        logger.info("calibre_metadata_import_skipped", reason="no_hardcover_token")
+        return 0
+
+    try:
+        library_ids = calibre_service.existing_book_ids(library_path)
+    except calibre_service.CalibreError as exc:
+        logger.warning("calibre_metadata_probe_failed", error=str(exc))
+        return 0
+
+    linked = {r[0] for r in db.query(CalibreBookLink.calibre_book_id).all()}
+    todo = sorted(library_ids - linked)[:limit]
+    if not todo:
+        return 0
+
+    try:
+        identities = calibre_service.book_identities(library_path, todo)
+        fmt_map = calibre_service.formats_for_ids(library_path, todo)
+    except calibre_service.CalibreError as exc:
+        logger.warning("calibre_metadata_identities_failed", error=str(exc))
+        return 0
+
+    created = 0
+    for cal_id, title, author, isbn in identities:
+        if not title:
+            continue
+        try:
+            hc = await lookup_book_by_title_author(title, author, db)
+        except Exception as exc:
+            logger.warning(
+                "calibre_metadata_lookup_failed", calibre_id=cal_id, title=title, error=str(exc)
+            )
+            hc = None
+        await asyncio.sleep(0.5)
+
+        if not hc or not hc.get("id"):
+            continue
+
+        # Guard against a wrong search hit polluting a library book.
+        want_tokens = calibre_service._title_tokens(title)
+        got_tokens = calibre_service._title_tokens(hc.get("title") or "")
+        if want_tokens and not calibre_service._titles_match(want_tokens, got_tokens):
+            logger.info(
+                "calibre_metadata_title_mismatch",
+                calibre_id=cal_id,
+                calibre_title=title,
+                hardcover_title=hc.get("title"),
+            )
+            continue
+
+        kinds = {calibre_service.classify_format(f) for f in fmt_map.get(cal_id, [])}
+        hc_id = hc["id"]
+        book = db.query(Book).filter(Book.hardcover_id == hc_id).first()
+        if book is None:
+            book = Book(
+                title=title,
+                author=author or None,
+                isbn=isbn or None,
+                hardcover_id=hc_id,
+                hardcover_slug=hc.get("slug"),
+                ebook_available="ebook" in kinds,
+                audiobook_available="audiobook" in kinds,
+            )
+            db.add(book)
+            try:
+                db.flush()
+            except Exception as exc:
+                db.rollback()
+                logger.warning(
+                    "calibre_metadata_book_create_failed",
+                    calibre_id=cal_id,
+                    title=title,
+                    error=str(exc),
+                )
+                continue
+
+        calibre_link_service.upsert_link(
+            db,
+            calibre_book_id=cal_id,
+            book_id=book.id,
+            source="fuzzy",
+            confidence=None,
+            confirmed=False,
+            calibre_isbn=isbn,
+            calibre_title=title,
+            commit=False,
+        )
+
+        try:
+            await enrich_book_from_hardcover(db, book)
+        except Exception as exc:
+            logger.warning("calibre_metadata_enrich_failed", book_id=book.id, error=str(exc))
+            db.rollback()
+            continue
+        if book.last_refreshed is None:
+            book.last_refreshed = datetime.now(timezone.utc)
+        try:
+            db.commit()
+            created += 1
+        except Exception as exc:
+            db.rollback()
+            logger.warning("calibre_metadata_commit_failed", book_id=book.id, error=str(exc))
+        await asyncio.sleep(0.5)
+
+    if created:
+        logger.info(
+            "calibre_metadata_imported_unlinked", created=created, checked=len(identities)
+        )
+    return created
+
+
+async def sync_calibre_metadata() -> None:
+    """Batch-fetch missing metadata for Calibre library books.
+
+    Runs on startup and once a day (and can be triggered from the admin Jobs
+    page). Three passes, each bounded per run:
+
+    1. Link library books that match a ``Book`` row we already have.
+    2. Resolve library books with no ``Book`` row at all against Hardcover,
+       creating and linking them (this is what clears "metadata from Calibre
+       only").
+    3. Refresh linked books whose local metadata is absent or stale-incomplete.
+    """
+    from app.routers.calibre import get_active_library_path, _bool_setting, OVERLAY_ENABLED_KEY
+    from app.services import calibre_link_service
+
+    db: Session = SessionLocal()
+    try:
+        library_path = get_active_library_path(db)
+        if not library_path:
+            logger.info("sync_calibre_metadata_skipped", reason="no_calibre_library")
+            return
+        if not _bool_setting(db, OVERLAY_ENABLED_KEY, True):
+            logger.info("sync_calibre_metadata_skipped", reason="overlay_disabled")
+            return
+
+        try:
+            calibre_link_service.heal_stale_links(db, library_path)
+            calibre_link_service.backfill_fuzzy_links(db, library_path)
+        except Exception as e:
+            logger.error("sync_calibre_metadata_link_error", error=str(e))
+            db.rollback()
+
+        imported = 0
+        try:
+            imported = await _import_unlinked_calibre_books(
+                db, library_path, limit=CALIBRE_METADATA_SCAN_LIMIT
+            )
+        except Exception as e:
+            logger.error("sync_calibre_metadata_import_error", error=str(e))
+            db.rollback()
+
+        enriched = await _enrich_calibre_metadata(db, limit=CALIBRE_METADATA_SCAN_LIMIT)
+        logger.info(
+            "sync_calibre_metadata_complete", imported=imported, enriched=enriched
+        )
+    except Exception as e:
+        logger.error("sync_calibre_metadata_error", error=str(e))
+        db.rollback()
+    finally:
+        db.close()
 
 
 # Give up auto-emailing a request after this many failed SMTP attempts.

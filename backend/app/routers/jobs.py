@@ -28,6 +28,7 @@ DEFAULT_JOBS = {
     "sync_hardcover_lists": {"interval_seconds": 6 * 60 * 60, "type": "PROCESS"},
     "send_availability_emails": {"interval_seconds": 5 * 60, "type": "PROCESS"},
     "reconcile_calibre_library": {"interval_seconds": 60, "type": "PROCESS"},
+    "sync_calibre_metadata": {"interval_seconds": 24 * 60 * 60, "type": "PROCESS"},
 }
 
 # Available interval options (in seconds) for the dropdown
@@ -255,7 +256,7 @@ async def run_job(
     run_job_now(job_name)
     
     # Import job functions for the background task wrapper
-    from app.tasks import refresh_seed_data, check_processing_requests, sync_from_booklore, sync_from_audiobookshelf, sync_missing_metadata, sync_hardcover_lists, send_availability_emails, reconcile_calibre_library
+    from app.tasks import refresh_seed_data, check_processing_requests, sync_from_booklore, sync_from_audiobookshelf, sync_missing_metadata, sync_hardcover_lists, send_availability_emails, reconcile_calibre_library, sync_calibre_metadata
 
     job_functions = {
         "refresh_seed_data": refresh_seed_data,
@@ -266,6 +267,7 @@ async def run_job(
         "sync_hardcover_lists": sync_hardcover_lists,
         "send_availability_emails": send_availability_emails,
         "reconcile_calibre_library": reconcile_calibre_library,
+        "sync_calibre_metadata": sync_calibre_metadata,
     }
     
     job_func = job_functions.get(job_name)
