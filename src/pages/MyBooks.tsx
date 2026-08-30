@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import {
   Library,
@@ -18,7 +18,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { calibreApi, type CalibreBook, type CalibreSort } from '@/lib/api';
 import { formatRating } from '@/lib/utils';
 import { useCalibreCover } from '@/hooks/useCalibreCover';
@@ -77,17 +77,18 @@ function CalibreBookCard({ book, onOpen }: { book: CalibreBook; onOpen: () => vo
           <CalibreCover book={book} />
         </div>
       </div>
-      <div className="mt-1.5 space-y-0.5">
+      {/* Fixed-height meta block so every card is the same height and the
+          covers stay aligned row-to-row regardless of title/series length. */}
+      <div className="mt-1.5 flex min-h-[5.75rem] flex-col gap-0.5">
         <h3 className="line-clamp-2 text-xs font-medium leading-snug text-foreground">
           {book.title}
         </h3>
         <p className="line-clamp-1 text-[11px] text-muted-foreground">{book.authors}</p>
-        {book.series && (
-          <p className="line-clamp-1 text-[11px] text-muted-foreground/80">
-            {book.series}
-            {book.series_index ? ` #${Number(book.series_index)}` : ''}
-          </p>
-        )}
+        <p className="line-clamp-1 text-[11px] text-muted-foreground/80">
+          {book.series
+            ? `${book.series}${book.series_index ? ` #${Number(book.series_index)}` : ''}`
+            : ' '}
+        </p>
         {book.rating ? (
           <span className="inline-flex items-center gap-1 text-[11px] text-amber-500">
             <Star className="h-3 w-3 fill-amber-400 text-amber-400" />
@@ -101,29 +102,71 @@ function CalibreBookCard({ book, onOpen }: { book: CalibreBook; onOpen: () => vo
 
 export default function MyBooks() {
   const navigate = useNavigate();
-  const [searchInput, setSearchInput] = useState('');
-  const [search, setSearch] = useState('');
-  const [sort, setSort] = useState<CalibreSort>('added');
-  const [page, setPage] = useState(1);
 
-  // Debounce the search input.
+  // Query / sort / page live in the URL so returning to this page (browser
+  // back, or Esc from a book) restores the exact list you left — which also
+  // lets scroll restoration land on the right content.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const search = searchParams.get('q')?.trim() ?? '';
+  const sortParam = searchParams.get('sort') as CalibreSort | null;
+  const sort: CalibreSort = SORT_OPTIONS.some((o) => o.value === sortParam)
+    ? (sortParam as CalibreSort)
+    : 'added';
+  const page = Math.max(1, Number(searchParams.get('page')) || 1);
+
+  const patchParams = useCallback(
+    (mutate: (p: URLSearchParams) => void) => {
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          mutate(next);
+          return next;
+        },
+        { replace: true },
+      );
+    },
+    [setSearchParams],
+  );
+
+  const [searchInput, setSearchInput] = useState(search);
+
+  // Debounce the search box into the `q` param.
   useEffect(() => {
+    const next = searchInput.trim();
+    if (next === search) return;
     const t = setTimeout(() => {
-      setSearch(searchInput.trim());
-      setPage(1);
+      patchParams((p) => {
+        if (next) p.set('q', next);
+        else p.delete('q');
+        p.delete('page');
+      });
     }, 350);
     return () => clearTimeout(t);
-  }, [searchInput]);
+  }, [searchInput, search, patchParams]);
 
-  useEffect(() => {
-    setPage(1);
-  }, [sort]);
+  const setSort = (value: CalibreSort) =>
+    patchParams((p) => {
+      if (value === 'added') p.delete('sort');
+      else p.set('sort', value);
+      p.delete('page');
+    });
+
+  const setPage = (updater: (prev: number) => number) =>
+    patchParams((p) => {
+      const next = updater(page);
+      if (next <= 1) p.delete('page');
+      else p.set('page', String(next));
+    });
 
   const { data, isLoading, isError, error, isFetching } = useQuery({
     queryKey: ['calibre-books', search, sort, page],
     queryFn: () => calibreApi.getBooks({ search, sort, page, pageSize: PAGE_SIZE }),
     placeholderData: keepPreviousData,
     retry: false,
+    // Keep the list around after navigating into a book so coming back
+    // re-renders instantly at full height (scroll restoration needs this).
+    staleTime: 60_000,
+    gcTime: 30 * 60_000,
   });
 
   const notConfigured =

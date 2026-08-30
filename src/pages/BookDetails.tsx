@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useParams, Link, useSearchParams, useNavigate, useLocation } from 'react-router-dom';
 import { ArrowLeft, Star, Calendar, BookOpen, Tag, Clock, Users, Headphones, Library, ExternalLink, Trash2, Search, X, Download, Globe } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -35,6 +35,28 @@ export default function BookDetails() {
   const isVisible = usePageVisibility();
   const bypassCache =
     searchParams.get('bypass_cache') === 'true' || searchParams.get('bypass_cache') === '1';
+
+  const goBack = useCallback(() => {
+    const backState = location.state as { from?: string } | null;
+    // A real in-app history entry — go back through it so the previous page's
+    // scroll position is restored (see ScrollRestoration).
+    if (location.key !== 'default') {
+      navigate(-1);
+      return;
+    }
+    navigate(backState?.from ?? '/');
+  }, [location.state, location.key, navigate]);
+
+  // Press Esc to return to the previous page (unless a dialog is open).
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.defaultPrevented) return;
+      if (requestOpen || searchOpen || relinkOpen || sourcesOpen) return;
+      goBack();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [goBack, requestOpen, searchOpen, relinkOpen, sourcesOpen]);
 
   const { data: book, isLoading, error } = useBookDetails(id);
   const hardcoverId = book?.hardcoverId ?? (book?.id ? Number(book.id) : undefined);
@@ -332,38 +354,21 @@ export default function BookDetails() {
   return (
     <>
       <div className="space-y-10 animate-fade-in-up">
-        {/* Back Button */}
+        {/* Back Button — mirrors the Esc-to-go-back behaviour */}
         {(() => {
           const backState = location.state as { from?: string; fromLabel?: string } | null;
-          const backClassName =
-            'inline-flex items-center gap-2 text-muted-foreground hover:text-primary transition-colors duration-300 group';
-          const backIcon = (
-            <ArrowLeft className="h-4 w-4 transition-transform duration-300 group-hover:-translate-x-1" />
-          );
-
-          if (backState?.from) {
-            return (
-              <Link to={backState.from} className={backClassName}>
-                {backIcon}
-                <span className="font-medium">{backState.fromLabel ?? 'Back'}</span>
-              </Link>
-            );
-          }
-
-          if (location.key !== 'default') {
-            return (
-              <button type="button" onClick={() => navigate(-1)} className={backClassName}>
-                {backIcon}
-                <span className="font-medium">Back</span>
-              </button>
-            );
-          }
-
+          const label =
+            backState?.fromLabel ??
+            (location.key === 'default' && !backState?.from ? 'Back to Discover' : 'Back');
           return (
-            <Link to="/" className={backClassName}>
-              {backIcon}
-              <span className="font-medium">Back to Discover</span>
-            </Link>
+            <button
+              type="button"
+              onClick={goBack}
+              className="inline-flex items-center gap-2 text-muted-foreground hover:text-primary transition-colors duration-300 group"
+            >
+              <ArrowLeft className="h-4 w-4 transition-transform duration-300 group-hover:-translate-x-1" />
+              <span className="font-medium">{label}</span>
+            </button>
           );
         })()}
 

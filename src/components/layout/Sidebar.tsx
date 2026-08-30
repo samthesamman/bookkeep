@@ -1,5 +1,5 @@
 import { NavLink, useLocation, Link } from 'react-router-dom';
-import { Compass, Clock, Settings, Users, Shield, BookOpen, Download, Sparkles, Library } from 'lucide-react';
+import { Compass, Clock, Settings, Users, Shield, BookOpen, Sparkles, Library } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useUser } from '@/contexts/UserContext';
 import { useQuery } from '@tanstack/react-query';
@@ -10,7 +10,6 @@ const navItems = [
   { to: '/', icon: Compass, label: 'Discover' },
   { to: '/my-books', icon: Library, label: 'My Books' },
   { to: '/requests', icon: Clock, label: 'Requests' },
-  { to: '/downloads', icon: Download, label: 'Downloads' },
   { to: '/series', icon: BookOpen, label: 'Series' },
 ];
 

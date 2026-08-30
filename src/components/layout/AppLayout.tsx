@@ -1,7 +1,9 @@
 import { Outlet } from 'react-router-dom';
-import { useState } from 'react';
+import { Suspense, useState } from 'react';
+import { Loader2 } from 'lucide-react';
 import { Sidebar } from './Sidebar';
 import { Header } from './Header';
+import { ScrollRestoration } from './ScrollRestoration';
 import { Sheet, SheetContent } from '@/components/ui/sheet';
 import { GEOCITIES_MODE } from '@/lib/geocities';
 import { GeocitiesBanner, GeocitiesFooter } from '@/components/geocities/GeocitiesChrome';
@@ -11,6 +13,8 @@ export function AppLayout() {
 
   return (
     <div className="min-h-screen bg-background relative">
+      <ScrollRestoration />
+
       {/* Cinematic ambient background effects – hidden on mobile to save GPU */}
       <div className="fixed inset-0 pointer-events-none overflow-hidden hidden md:block">
         {/* Top-left emerald glow */}
@@ -34,11 +38,21 @@ export function AppLayout() {
       {/* Header */}
       <Header onMenuClick={() => setMobileNavOpen(true)} />
 
-      {/* Main content */}
+      {/* Main content. The Suspense boundary lives here (not around the whole
+          router) so lazy page chunks don't unmount the layout, the sidebar, or
+          the scroll-restoration bookkeeping on every navigation. */}
       <main className="relative pt-24 sm:pt-16 md:ml-64">
         <div className="p-4 sm:p-6 lg:p-8">
           {GEOCITIES_MODE && <GeocitiesBanner />}
-          <Outlet />
+          <Suspense
+            fallback={
+              <div className="flex items-center justify-center min-h-[50vh]">
+                <Loader2 className="h-8 w-8 animate-spin text-primary" />
+              </div>
+            }
+          >
+            <Outlet />
+          </Suspense>
           {GEOCITIES_MODE && <GeocitiesFooter />}
         </div>
       </main>

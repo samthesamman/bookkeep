@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { Link, Navigate, useParams } from 'react-router-dom';
+import { useCallback, useEffect, useState } from 'react';
+import { Link, Navigate, useLocation, useNavigate, useParams } from 'react-router-dom';
 import {
   ArrowLeft,
   BookOpen,
@@ -52,6 +52,8 @@ function formatDate(dateStr?: string | null) {
 export default function CalibreBookDetails() {
   const { id } = useParams();
   const calibreId = Number(id);
+  const navigate = useNavigate();
+  const location = useLocation();
   const queryClient = useQueryClient();
   const { isAdmin } = useUser();
   const [relinkOpen, setRelinkOpen] = useState(false);
@@ -104,6 +106,28 @@ export default function CalibreBookDetails() {
       setBusyLink(false);
     }
   };
+
+  const goBack = useCallback(() => {
+    const backState = location.state as { from?: string } | null;
+    // A real in-app history entry — go back through it so the previous page's
+    // scroll position is restored (see ScrollRestoration).
+    if (location.key !== 'default') {
+      navigate(-1);
+      return;
+    }
+    navigate(backState?.from ?? '/my-books');
+  }, [location.state, location.key, navigate]);
+
+  // Press Esc to return to the previous page (unless a dialog is open).
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.defaultPrevented) return;
+      if (relinkOpen || sourcesOpen) return;
+      goBack();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [goBack, relinkOpen, sourcesOpen]);
 
   if (!Number.isFinite(calibreId)) {
     return <Navigate to="/my-books" replace />;
@@ -158,13 +182,16 @@ export default function CalibreBookDetails() {
   return (
     <>
       <div className="space-y-10 animate-fade-in-up">
-        <Link
-          to="/my-books"
+        <button
+          type="button"
+          onClick={goBack}
           className="group inline-flex items-center gap-2 text-muted-foreground transition-colors duration-300 hover:text-primary"
         >
           <ArrowLeft className="h-4 w-4 transition-transform duration-300 group-hover:-translate-x-1" />
-          <span className="font-medium">Back to My Books</span>
-        </Link>
+          <span className="font-medium">
+            {(location.state as { fromLabel?: string } | null)?.fromLabel ?? 'Back to My Books'}
+          </span>
+        </button>
 
         <div className="relative overflow-hidden rounded-3xl">
           {cover && (
