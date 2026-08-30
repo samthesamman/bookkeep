@@ -221,6 +221,22 @@ def create_book(book: schemas.BookCreate, db: Session = Depends(database.get_db)
     }
     return schemas.BookResponse(**response_dict)
 
+@router.get("/by-hardcover/{hardcover_id}", response_model=schemas.BookResponse)
+def get_book_by_hardcover(hardcover_id: int, db: Session = Depends(database.get_db)):
+    """Return the local Book row for a Hardcover id (e.g. to overlay enriched
+    metadata on the Hardcover-sourced detail page). 404 if we have not saved it."""
+    db_book = (
+        db.query(models.Book).filter(models.Book.hardcover_id == hardcover_id).first()
+    )
+    if not db_book:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Book not found")
+    response_dict = {
+        **{k: v for k, v in db_book.__dict__.items() if not k.startswith("_")},
+        "genres": [g.strip() for g in db_book.genres.split(",")] if db_book.genres else [],
+    }
+    return schemas.BookResponse(**response_dict)
+
+
 @router.get("/{book_id}", response_model=schemas.BookResponse)
 def get_book(book_id: int, db: Session = Depends(database.get_db)):
     db_book = db.query(models.Book).filter(models.Book.id == book_id).first()

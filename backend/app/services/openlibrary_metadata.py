@@ -13,6 +13,7 @@ subjects.
 """
 from __future__ import annotations
 
+import asyncio
 import re
 from typing import Any, Optional
 
@@ -25,9 +26,17 @@ _SEARCH_URL = "https://openlibrary.org/search.json"
 _WORKS_URL = "https://openlibrary.org/works/{key}.json"
 _COVER_URL = "https://covers.openlibrary.org/b/id/{cover_id}-L.jpg"
 
-# Open Library asks automated clients to identify themselves.
-_HEADERS = {"User-Agent": "bookkeep/1.0 (+https://github.com/; self-hosted library manager)"}
-_TIMEOUT = httpx.Timeout(15.0)
+# Open Library blocks generic clients — identify the app clearly.
+_HEADERS = {
+    "User-Agent": "bookkeep/1.0 (self-hosted personal library manager; https://github.com/)",
+    "Accept": "application/json",
+}
+_TIMEOUT = httpx.Timeout(20.0)
+_RETRY_STATUSES = {429, 500, 502, 503, 504}
+
+
+class OpenLibraryError(RuntimeError):
+    """Open Library could not be reached / refused the request (not just 'no match')."""
 
 _SEARCH_FIELDS = ",".join(
     [
@@ -118,13 +127,28 @@ def _description_text(work: dict) -> Optional[str]:
 async def _get_json(
     client: httpx.AsyncClient, url: str, params: Optional[dict] = None
 ) -> Optional[Any]:
-    try:
-        resp = await client.get(url, params=params, headers=_HEADERS, follow_redirects=True)
-        resp.raise_for_status()
-        return resp.json()
-    except (httpx.HTTPError, ValueError) as exc:
-        logger.warning("openlibrary_request_failed", url=url, error=str(exc))
-        return None
+    """One Open Library request with retry on 429/5xx. Raises OpenLibraryError on failure."""
+    for attempt in range(3):
+        try:
+            resp = await client.get(
+                url, params=params, headers=_HEADERS, follow_redirects=True
+            )
+        except httpx.HTTPError as exc:
+            if attempt < 2:
+                await asyncio.sleep(0.6 * (attempt + 1))
+                continue
+            raise OpenLibraryError(f"Open Library unreachable: {exc}") from exc
+
+        if resp.status_code in _RETRY_STATUSES and attempt < 2:
+            await asyncio.sleep(2 * (attempt + 1))
+            continue
+        if resp.status_code >= 400:
+            raise OpenLibraryError(f"Open Library returned HTTP {resp.status_code}")
+        try:
+            return resp.json()
+        except ValueError as exc:
+            raise OpenLibraryError("Open Library sent an unreadable response") from exc
+    raise OpenLibraryError("Open Library did not respond after retries")
 
 
 async def fetch(
@@ -172,7 +196,11 @@ async def fetch(
         work_key = (doc.get("key") or "").rsplit("/", 1)[-1]
         work: dict = {}
         if work_key:
-            work = await _get_json(client, _WORKS_URL.format(key=work_key)) or {}
+            # Description / curated subjects are a bonus — a search hit still counts.
+            try:
+                work = await _get_json(client, _WORKS_URL.format(key=work_key)) or {}
+            except OpenLibraryError as exc:
+                logger.warning("openlibrary_work_fetch_failed", key=work_key, error=str(exc))
 
     genres = _clean_subjects(work.get("subjects") or doc.get("subject") or [])
     cover_url = _COVER_URL.format(cover_id=doc["cover_i"]) if doc.get("cover_i") else None

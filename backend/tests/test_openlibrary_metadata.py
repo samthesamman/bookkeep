@@ -51,8 +51,9 @@ def test_description_text_unwraps_and_trims_source_note():
 # --------------------------------------------------------------------------- #
 # fetch()
 # --------------------------------------------------------------------------- #
-def _resp(json_body):
+def _resp(json_body, status_code=200):
     r = MagicMock()
+    r.status_code = status_code
     r.json.return_value = json_body
     r.raise_for_status.return_value = None
     return r
@@ -120,3 +121,25 @@ async def test_fetch_returns_none_when_no_docs():
 @pytest.mark.asyncio
 async def test_fetch_needs_isbn_or_title():
     assert await ol.fetch() is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_raises_on_http_error():
+    factory, _ = _client_returning(_resp({}, status_code=403), _resp({}, status_code=403))
+    with patch.object(ol.httpx, "AsyncClient", factory):
+        with pytest.raises(ol.OpenLibraryError):
+            await ol.fetch(title="Dune")
+
+
+@pytest.mark.asyncio
+async def test_fetch_survives_work_lookup_failure():
+    search = _resp({"docs": [{"key": "/works/OL1W", "title": "Dune", "first_publish_year": 1965}]})
+    factory, _ = _client_returning(
+        search, _resp({}, status_code=500), _resp({}, status_code=500), _resp({}, status_code=500)
+    )
+    with patch.object(ol.httpx, "AsyncClient", factory), patch.object(
+        ol.asyncio, "sleep", AsyncMock()
+    ):
+        out = await ol.fetch(title="Dune")
+    assert out is not None and out["title"] == "Dune"
+    assert out["description"] is None  # the work lookup failed, but the hit still counts

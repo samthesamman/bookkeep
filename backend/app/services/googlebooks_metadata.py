@@ -5,13 +5,17 @@ usually complete and well written) and a catalog on par with Open Library. It
 also carries per-edition page counts, categories, and Google Play user ratings.
 It has no concept of a book series.
 
-Free to use without an API key at low volume (a shared ~1000 requests/day/IP
-soft limit); set ``GOOGLE_BOOKS_API_KEY`` to lift that. bookkeep only calls it
-for "thorough" enrichment (after a download, and the admin refresh/link
-actions), never in the every-minute or daily bulk sweeps.
+Without an API key the endpoint shares a small per-IP quota and returns HTTP 429
+very readily — set ``GOOGLE_BOOKS_API_KEY`` (free, ~1000 req/day) to make it
+usable. bookkeep only calls Google Books for "thorough" enrichment (after a
+download, and the admin refresh / source-picker actions), never in the
+every-minute or daily bulk sweeps. ``fetch`` raises :class:`GoogleBooksError`
+when the service is unreachable / rate-limited (vs returning ``None`` for a
+plain no-match).
 """
 from __future__ import annotations
 
+import asyncio
 import html
 import os
 import re
@@ -25,6 +29,11 @@ logger = structlog.get_logger()
 _API_URL = "https://www.googleapis.com/books/v1/volumes"
 _TIMEOUT = httpx.Timeout(15.0)
 _MAX_GENRES = 8
+_RETRY_STATUSES = {429, 500, 502, 503, 504}
+
+
+class GoogleBooksError(RuntimeError):
+    """Google Books could not be reached / refused the request (not just 'no match')."""
 
 # Largest to smallest image keys Google returns.
 _IMAGE_KEYS = ("extraLarge", "large", "medium", "small", "thumbnail", "smallThumbnail")
@@ -90,13 +99,30 @@ def _categories(cats: list[str]) -> list[str]:
 
 
 async def _get(client: httpx.AsyncClient, params: dict) -> Optional[dict]:
-    try:
-        resp = await client.get(_API_URL, params=params)
-        resp.raise_for_status()
-        return resp.json()
-    except (httpx.HTTPError, ValueError) as exc:
-        logger.warning("googlebooks_request_failed", error=str(exc))
-        return None
+    """One Google Books request with retry on 429/5xx. Raises GoogleBooksError on failure."""
+    for attempt in range(3):
+        try:
+            resp = await client.get(_API_URL, params=params)
+        except httpx.HTTPError as exc:
+            if attempt < 2:
+                await asyncio.sleep(0.6 * (attempt + 1))
+                continue
+            raise GoogleBooksError(f"Google Books unreachable: {exc}") from exc
+
+        if resp.status_code in _RETRY_STATUSES and attempt < 2:
+            await asyncio.sleep(2 * (attempt + 1))
+            continue
+        if resp.status_code == 429:
+            raise GoogleBooksError(
+                "Google Books rate limit hit — set GOOGLE_BOOKS_API_KEY to raise the quota"
+            )
+        if resp.status_code >= 400:
+            raise GoogleBooksError(f"Google Books returned HTTP {resp.status_code}")
+        try:
+            return resp.json()
+        except ValueError as exc:
+            raise GoogleBooksError("Google Books sent an unreadable response") from exc
+    raise GoogleBooksError("Google Books did not respond after retries")
 
 
 async def fetch(

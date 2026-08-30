@@ -66,29 +66,39 @@ def _title_match(a: str, b: str) -> bool:
     return len(ta & tb) / len(ta | tb) >= 0.6
 
 
-async def _hardcover_payload(db, book, *, resolve: bool) -> Optional[dict]:
-    """Raw Hardcover ``books`` payload for ``book`` (the shape hc_normalize wants)."""
+async def _hardcover_payload(
+    db, book, *, resolve: bool, title: Optional[str] = None, author: Optional[str] = None
+) -> Optional[dict]:
+    """Raw Hardcover ``books`` payload for ``book`` (the shape hc_normalize wants).
+
+    A ``title`` override forces a fresh title/author search (ignoring any stored
+    ``hardcover_id`` / slug), for when the caller thinks the stored identity is
+    wrong.
+    """
     from app.routers.hardcover import (
         lookup_book_by_id,
         lookup_book_by_slug,
         lookup_book_by_title_author,
     )
 
-    if getattr(book, "hardcover_slug", None):
-        return await lookup_book_by_slug(book.hardcover_slug, db)
-    if getattr(book, "hardcover_id", None):
-        return await lookup_book_by_id(book.hardcover_id, db)
-    if not resolve:
-        return None
+    if not title:
+        if getattr(book, "hardcover_slug", None):
+            return await lookup_book_by_slug(book.hardcover_slug, db)
+        if getattr(book, "hardcover_id", None):
+            return await lookup_book_by_id(book.hardcover_id, db)
+        if not resolve:
+            return None
 
-    found = await lookup_book_by_title_author(book.title, book.author, db)
+    want_title = title or book.title
+    want_author = author if author is not None else book.author
+    found = await lookup_book_by_title_author(want_title, want_author, db)
     if not found or not found.get("id"):
         return None
-    if not _title_match(book.title, found.get("title") or ""):
+    if not _title_match(want_title, found.get("title") or ""):
         logger.info(
             "book_metadata_hardcover_title_mismatch",
             book_id=getattr(book, "id", None),
-            wanted=book.title,
+            wanted=want_title,
             got=found.get("title"),
         )
         return None
@@ -213,4 +223,82 @@ async def enrich_book(
             changed = True
 
     changed = _merge(book, sources, overwrite=overwrite) or changed
+    return changed
+
+
+_SOURCE_KEY = {"googlebooks": "gb", "openlibrary": "ol", "hardcover": "hc"}
+APPLYABLE_FIELDS = (
+    "title",
+    "description",
+    "cover_url",
+    "page_count",
+    "published_date",
+    "rating",
+    "ratings_count",
+    "genres",
+    "series",
+    "series_id",
+    "series_position",
+)
+
+
+async def fetch_source(
+    db, book, source: str, *, title: Optional[str] = None, author: Optional[str] = None
+) -> Optional[dict]:
+    """Fetch one named source's normalized metadata for ``book`` (or ``None``).
+
+    ``source`` is ``"googlebooks"`` | ``"openlibrary"`` | ``"hardcover"``. A
+    ``title`` (and optional ``author``) override searches for that instead of the
+    stored value — and skips the ISBN / stored-id shortcut, since those point at
+    the book whose title is being corrected.
+    """
+    override = bool(title and title.strip())
+    q_title = title.strip() if override else book.title
+    q_author = author if (author is not None and override) else book.author
+    q_isbn = None if override else getattr(book, "isbn", None)
+
+    if source == "googlebooks":
+        return await gb.fetch(isbn=q_isbn, title=q_title, author=q_author)
+    if source == "openlibrary":
+        return await ol.fetch(isbn=q_isbn, title=q_title, author=q_author)
+    if source == "hardcover":
+        payload = await _hardcover_payload(
+            db,
+            book,
+            resolve=True,
+            title=q_title if override else None,
+            author=q_author if override else None,
+        )
+        return hc_normalize(payload) if payload else None
+    return None
+
+
+def apply_source(
+    book, source: str, data: dict, *, fields=None, overwrite: bool = True
+) -> bool:
+    """Write one source's values onto ``book``. Returns True if anything changed.
+
+    ``fields`` optionally restricts which fields are copied; ``None`` copies all
+    of :data:`APPLYABLE_FIELDS` the source provides. Picking ``"hardcover"`` also
+    adopts its ``hardcover_id`` / slug when the row has none.
+    """
+    key = _SOURCE_KEY.get(source)
+    if not key or not data:
+        return False
+
+    wanted = set(fields) if fields else set(APPLYABLE_FIELDS)
+    filtered = {k: v for k, v in data.items() if k in wanted}
+    changed = _merge(book, {key: filtered}, overwrite=overwrite)
+
+    # Title is identity, not a merge-table field — adopt the source's when asked.
+    new_title = data.get("title")
+    if "title" in wanted and new_title and book.title != new_title:
+        book.title = new_title
+        changed = True
+
+    if key == "hc" and data.get("hardcover_id") and not getattr(book, "hardcover_id", None):
+        book.hardcover_id = data["hardcover_id"]
+        book.hardcover_slug = data.get("hardcover_slug") or book.hardcover_slug
+        changed = True
+
     return changed

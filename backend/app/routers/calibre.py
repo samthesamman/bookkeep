@@ -542,3 +542,241 @@ async def refresh_book_metadata(
         link_confirmed=bool(link.confirmed),
         hardcover_id=book.hardcover_id,
     )
+
+
+# ---------------------------------------------------------------------------
+# Metadata source picker: compare Google Books / Open Library / Hardcover and
+# let an admin apply a chosen one to this book.
+# ---------------------------------------------------------------------------
+class MetadataCandidate(BaseModel):
+    source: str  # "current" | "googlebooks" | "openlibrary" | "hardcover"
+    found: bool = True
+    note: Optional[str] = None  # why there is nothing to show (no match / error)
+    title: Optional[str] = None
+    description: Optional[str] = None
+    cover_url: Optional[str] = None
+    page_count: Optional[int] = None
+    published_date: Optional[str] = None
+    rating: Optional[float] = None
+    ratings_count: Optional[int] = None
+    genres: list[str] = []
+    series: Optional[str] = None
+    series_position: Optional[float] = None
+
+
+class MetadataCandidatesResponse(BaseModel):
+    linked_book_id: Optional[int] = None
+    current: MetadataCandidate
+    candidates: list[MetadataCandidate]
+
+
+class ApplyMetadataRequest(BaseModel):
+    source: str
+    fields: Optional[list[str]] = None
+    # Optional search-title override, when the stored title is wrong.
+    title: Optional[str] = None
+    author: Optional[str] = None
+
+
+class ApplyMetadataResponse(BaseModel):
+    linked_book_id: int
+    hardcover_id: Optional[int] = None
+    current: MetadataCandidate
+
+
+_METADATA_SOURCES = ("googlebooks", "openlibrary", "hardcover")
+
+
+def _as_genre_list(value) -> list[str]:
+    if isinstance(value, list):
+        return [str(v).strip() for v in value if str(v).strip()]
+    if isinstance(value, str):
+        return [g.strip() for g in value.split(",") if g.strip()]
+    return []
+
+
+def _candidate(source: str, d: Optional[dict]) -> MetadataCandidate:
+    d = d or {}
+    return MetadataCandidate(
+        source=source,
+        title=d.get("title"),
+        description=d.get("description"),
+        cover_url=d.get("cover_url"),
+        page_count=d.get("page_count"),
+        published_date=d.get("published_date"),
+        rating=d.get("rating"),
+        ratings_count=d.get("ratings_count"),
+        genres=_as_genre_list(d.get("genres")),
+        series=d.get("series"),
+        series_position=d.get("series_position"),
+    )
+
+
+def _current_candidate(book: models.Book) -> MetadataCandidate:
+    return _candidate(
+        "current",
+        {
+            "title": book.title,
+            "description": book.description,
+            "cover_url": book.cover_url,
+            "page_count": book.page_count,
+            "published_date": book.published_date,
+            "rating": book.rating,
+            "ratings_count": book.ratings_count,
+            "genres": book.genres,
+            "series": book.series,
+            "series_position": book.series_position,
+        },
+    )
+
+
+async def _book_for_calibre(
+    book_id: int, db: Session
+) -> tuple[models.Book, Optional[models.CalibreBookLink]]:
+    """The Book row for a Calibre book id, creating a transient one if unlinked.
+
+    A transient row is added + flushed (so metadata can be written to it) but the
+    caller decides whether to commit or roll back.
+    """
+    link = calibre_link_service.get_links_for_calibre_ids(db, [book_id]).get(book_id)
+    if link is not None and link.book is not None:
+        return link.book, link
+
+    library_path = _require_library(db)
+    cal = calibre_service.get_book(library_path, book_id)
+    if cal is None:
+        raise HTTPException(status_code=404, detail="Calibre book not found")
+
+    isbn = (cal.get("identifiers") or {}).get("isbn")
+    book = None
+    if isbn:
+        book = db.query(models.Book).filter(models.Book.isbn == isbn).first()
+    if book is None:
+        book = models.Book(
+            title=cal.get("title") or "Untitled",
+            author=cal.get("authors") or "Unknown Author",
+            isbn=isbn or None,
+        )
+        db.add(book)
+        db.flush()
+    return book, None
+
+
+@router.get(
+    "/books/{book_id}/metadata-candidates", response_model=MetadataCandidatesResponse
+)
+async def metadata_candidates(
+    book_id: int,
+    title: Optional[str] = Query(None, description="Search title override"),
+    author: Optional[str] = Query(None, description="Search author override"),
+    db: Session = Depends(get_db),
+    _: models.User = Depends(require_admin),
+):
+    """Fetch this book's metadata from all three sources for side-by-side compare.
+
+    Pass ``title`` (and optionally ``author``) to search the providers for a
+    corrected title instead of the stored one.
+    """
+    from app.services import book_metadata
+
+    book, link = await _book_for_calibre(book_id, db)
+    current = _current_candidate(book)
+
+    candidates: list[MetadataCandidate] = []
+    for src in _METADATA_SOURCES:
+        try:
+            data = await book_metadata.fetch_source(
+                db, book, src, title=title, author=author
+            )
+        except Exception as exc:  # noqa: BLE001 - surface it, don't hide the column
+            logger.warning(
+                "metadata_candidate_fetch_failed", source=src, book_id=book_id, error=str(exc)
+            )
+            candidates.append(MetadataCandidate(source=src, found=False, note=str(exc)))
+            continue
+        if data:
+            candidates.append(_candidate(src, data))
+        else:
+            candidates.append(
+                MetadataCandidate(source=src, found=False, note="No match for this title.")
+            )
+
+    # Read-only: drop any transient Book row we created to run the lookups.
+    db.rollback()
+
+    return MetadataCandidatesResponse(
+        linked_book_id=link.book_id if link else None,
+        current=current,
+        candidates=candidates,
+    )
+
+
+@router.post("/books/{book_id}/apply-metadata", response_model=ApplyMetadataResponse)
+async def apply_metadata(
+    book_id: int,
+    body: ApplyMetadataRequest,
+    db: Session = Depends(get_db),
+    _: models.User = Depends(require_admin),
+):
+    """Apply one chosen source's metadata to this book (linking it if needed)."""
+    from datetime import datetime, timezone
+    from app.services import book_metadata
+
+    if body.source not in _METADATA_SOURCES:
+        raise HTTPException(status_code=400, detail=f"Unknown source '{body.source}'")
+
+    book, link = await _book_for_calibre(book_id, db)
+
+    try:
+        data = await book_metadata.fetch_source(
+            db, book, body.source, title=body.title, author=body.author
+        )
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=502, detail=f"{body.source} lookup failed: {exc}")
+    if not data:
+        db.rollback()
+        raise HTTPException(status_code=404, detail=f"No {body.source} match for this book")
+
+    if body.fields is not None:
+        fields = body.fields
+    else:
+        # Adopt the source's canonical title only when the admin searched with a
+        # corrected one; otherwise leave the stored title alone.
+        fields = [f for f in book_metadata.APPLYABLE_FIELDS if f != "title"]
+        if (body.title or "").strip():
+            fields.append("title")
+    book_metadata.apply_source(book, body.source, data, fields=fields, overwrite=True)
+    book.last_refreshed = datetime.now(timezone.utc)
+
+    if link is None:
+        cal = calibre_service.get_book(_require_library(db), book_id)
+        calibre_link_service.upsert_link(
+            db,
+            calibre_book_id=book_id,
+            book_id=book.id,
+            source="manual",
+            confidence=None,
+            confirmed=True,
+            calibre_isbn=book.isbn,
+            calibre_title=(cal or {}).get("title"),
+            commit=False,
+        )
+        kinds = {
+            calibre_service.classify_format(d["format"])
+            for d in ((cal or {}).get("format_details") or [])
+        }
+        if "ebook" in kinds:
+            book.ebook_available = True
+        if "audiobook" in kinds:
+            book.audiobook_available = True
+
+    db.commit()
+    db.refresh(book)
+    logger.info("calibre_metadata_applied", book_id=book_id, source=body.source, fields=body.fields)
+
+    return ApplyMetadataResponse(
+        linked_book_id=book.id,
+        hardcover_id=book.hardcover_id,
+        current=_current_candidate(book),
+    )

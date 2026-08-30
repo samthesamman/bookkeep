@@ -92,6 +92,63 @@ def test_merge_overwrite_replaces():
 # --------------------------------------------------------------------------- #
 # enrich_book
 # --------------------------------------------------------------------------- #
+def test_apply_source_writes_one_source_and_respects_fields():
+    b = Book(title="Dune", author="Frank Herbert")
+    gb_data = {"description": "GB blurb", "cover_url": "gb.jpg", "genres": ["Sci-Fi"], "rating": 4.9}
+
+    assert bm.apply_source(b, "googlebooks", gb_data, fields=["description"]) is True
+    assert b.description == "GB blurb"
+    assert b.cover_url is None  # not in fields
+    assert b.rating is None
+
+    b2 = Book(title="Dune", author="Frank Herbert", description="old")
+    bm.apply_source(b2, "googlebooks", gb_data)  # all fields, overwrite
+    assert b2.description == "GB blurb"
+    assert b2.cover_url == "gb.jpg"
+    assert b2.genres == "Sci-Fi"
+
+
+def test_apply_source_title_only_when_requested():
+    data = {"title": "Correct Title", "description": "blurb"}
+    b = Book(title="Wrong Title", author="A")
+    bm.apply_source(b, "googlebooks", data)  # default fields = all
+    assert b.title == "Correct Title"
+
+    b2 = Book(title="Wrong Title", author="A")
+    bm.apply_source(b2, "googlebooks", data, fields=["description"])
+    assert b2.title == "Wrong Title"  # title not in fields
+
+
+@pytest.mark.asyncio
+async def test_fetch_source_title_override_ignores_isbn_and_stored_id():
+    book = Book(title="Old Wrong Title", author="Frank Herbert", isbn="9780441013593")
+    book.hardcover_slug = "old-wrong"
+    captured = {}
+
+    async def fake_gb_fetch(*, isbn, title, author):
+        captured.update(isbn=isbn, title=title, author=author)
+        return {"title": title, "description": "d"}
+
+    with patch.object(bm.gb, "fetch", fake_gb_fetch):
+        await bm.fetch_source(None, book, "googlebooks", title="  Dune  ")
+
+    assert captured == {"isbn": None, "title": "Dune", "author": "Frank Herbert"}
+
+
+def test_apply_source_hardcover_adopts_id():
+    b = Book(title="Dune", author="Frank Herbert")
+    hc_data = {"description": "HC blurb", "hardcover_id": 42, "hardcover_slug": "dune", "series": "Dune"}
+    assert bm.apply_source(b, "hardcover", hc_data) is True
+    assert b.hardcover_id == 42 and b.hardcover_slug == "dune"
+    assert b.series == "Dune"
+
+
+def test_apply_source_unknown_or_empty_is_noop():
+    b = Book(title="Dune", author="Frank Herbert")
+    assert bm.apply_source(b, "bogus", {"description": "x"}) is False
+    assert bm.apply_source(b, "googlebooks", {}) is False
+
+
 @pytest.mark.asyncio
 async def test_enrich_uses_google_only_when_asked():
     book = Book(title="Dune", author="Frank Herbert")

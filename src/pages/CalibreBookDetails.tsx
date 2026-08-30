@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Link, Navigate, useParams } from 'react-router-dom';
 import {
   ArrowLeft,
@@ -8,6 +8,7 @@ import {
   Link2,
   Link2Off,
   RefreshCw,
+  SlidersHorizontal,
   Sparkles,
   Star,
 } from 'lucide-react';
@@ -18,9 +19,11 @@ import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { CalibreFormatActions } from '@/components/books/CalibreFormatActions';
 import { CalibreRelinkDialog } from '@/components/books/CalibreRelinkDialog';
+import { MetadataSourceDialog } from '@/components/books/MetadataSourceDialog';
 import { calibreApi } from '@/lib/api';
 import { formatRating } from '@/lib/utils';
 import { useUser } from '@/contexts/UserContext';
+import { useCalibreCover } from '@/hooks/useCalibreCover';
 
 const LINK_SOURCE_LABEL: Record<string, string> = {
   download: 'matched from your request',
@@ -52,6 +55,7 @@ export default function CalibreBookDetails() {
   const queryClient = useQueryClient();
   const { isAdmin } = useUser();
   const [relinkOpen, setRelinkOpen] = useState(false);
+  const [sourcesOpen, setSourcesOpen] = useState(false);
   const [busyLink, setBusyLink] = useState(false);
 
   const { data: book, isLoading, error } = useQuery({
@@ -60,20 +64,10 @@ export default function CalibreBookDetails() {
     enabled: Number.isFinite(calibreId),
   });
 
-  const { data: coverUrl } = useQuery({
-    queryKey: ['calibre-cover', calibreId],
-    queryFn: async () => URL.createObjectURL(await calibreApi.fetchCover(calibreId)),
-    enabled: Number.isFinite(calibreId) && !!book?.has_cover && !book?.overlay_cover_url,
-    retry: false,
-    staleTime: 10 * 60 * 1000,
-    gcTime: 10 * 60 * 1000,
-  });
-
-  useEffect(() => {
-    return () => {
-      if (coverUrl) URL.revokeObjectURL(coverUrl);
-    };
-  }, [coverUrl]);
+  const { data: coverUrl } = useCalibreCover(
+    calibreId,
+    !!book?.has_cover && !book?.overlay_cover_url,
+  );
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ['calibre-book', calibreId] });
@@ -296,12 +290,21 @@ export default function CalibreBookDetails() {
                           : ''}
                       </span>
                       {isAdmin && (
-                        <span className="ml-auto flex gap-1">
+                        <span className="ml-auto flex flex-wrap gap-1">
                           <Button variant="ghost" size="sm" disabled={busyLink} onClick={handleRefresh}>
                             <RefreshCw
                               className={`mr-1 h-3.5 w-3.5 ${busyLink ? 'animate-spin' : ''}`}
                             />
                             Refresh
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            disabled={busyLink}
+                            onClick={() => setSourcesOpen(true)}
+                          >
+                            <SlidersHorizontal className="mr-1 h-3.5 w-3.5" />
+                            Choose source
                           </Button>
                           <Button
                             variant="ghost"
@@ -323,16 +326,26 @@ export default function CalibreBookDetails() {
                     <>
                       <span className="text-muted-foreground">Metadata from Calibre only.</span>
                       {isAdmin && (
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="ml-auto"
-                          disabled={busyLink}
-                          onClick={() => setRelinkOpen(true)}
-                        >
-                          <Link2 className="mr-1 h-3.5 w-3.5" />
-                          Link a Hardcover book
-                        </Button>
+                        <span className="ml-auto flex flex-wrap gap-1">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            disabled={busyLink}
+                            onClick={() => setSourcesOpen(true)}
+                          >
+                            <SlidersHorizontal className="mr-1 h-3.5 w-3.5" />
+                            Choose source
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            disabled={busyLink}
+                            onClick={() => setRelinkOpen(true)}
+                          >
+                            <Link2 className="mr-1 h-3.5 w-3.5" />
+                            Link a Hardcover book
+                          </Button>
+                        </span>
                       )}
                     </>
                   )}
@@ -366,6 +379,15 @@ export default function CalibreBookDetails() {
         onOpenChange={setRelinkOpen}
         onLinked={invalidate}
       />
+
+      {isAdmin && (
+        <MetadataSourceDialog
+          calibreId={calibreId}
+          open={sourcesOpen}
+          onOpenChange={setSourcesOpen}
+          onApplied={invalidate}
+        />
+      )}
     </>
   );
 }

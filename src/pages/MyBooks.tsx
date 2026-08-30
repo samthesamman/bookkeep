@@ -21,6 +21,7 @@ import {
 import { useNavigate } from 'react-router-dom';
 import { calibreApi, type CalibreBook, type CalibreSort } from '@/lib/api';
 import { formatRating } from '@/lib/utils';
+import { useCalibreCover } from '@/hooks/useCalibreCover';
 
 const PAGE_SIZE = 60;
 
@@ -31,22 +32,12 @@ const SORT_OPTIONS: { value: CalibreSort; label: string }[] = [
   { value: 'pubdate', label: 'Publish date' },
 ];
 
-/** Cover image fetched with the auth token and rendered from an object URL. */
+/** Cover image fetched with the auth token (data URL — see useCalibreCover). */
 function CalibreCover({ book }: { book: CalibreBook }) {
-  const { data: url } = useQuery({
-    queryKey: ['calibre-cover', book.id],
-    queryFn: async () => URL.createObjectURL(await calibreApi.fetchCover(book.id)),
-    enabled: book.has_cover && !book.overlay_cover_url,
-    staleTime: 10 * 60 * 1000,
-    gcTime: 10 * 60 * 1000,
-    retry: false,
-  });
-
-  useEffect(() => {
-    return () => {
-      if (url) URL.revokeObjectURL(url);
-    };
-  }, [url]);
+  const { data: url } = useCalibreCover(
+    book.id,
+    book.has_cover && !book.overlay_cover_url,
+  );
 
   if (book.overlay_cover_url) {
     return (

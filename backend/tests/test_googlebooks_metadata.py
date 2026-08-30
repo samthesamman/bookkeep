@@ -37,8 +37,9 @@ def test_title_match():
     assert not gb._title_match("Dune", "Dune Messiah")
 
 
-def _resp(json_body):
+def _resp(json_body, status_code=200):
     r = MagicMock()
+    r.status_code = status_code
     r.json.return_value = json_body
     r.raise_for_status.return_value = None
     return r
@@ -98,3 +99,17 @@ async def test_fetch_title_search_rejects_mismatch():
 @pytest.mark.asyncio
 async def test_fetch_needs_isbn_or_title():
     assert await gb.fetch() is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_raises_googlebooks_error_on_rate_limit():
+    factory, _ = _client_returning(
+        _resp({}, status_code=429),
+        _resp({}, status_code=429),
+        _resp({}, status_code=429),
+    )
+    with patch.object(gb.httpx, "AsyncClient", factory), patch.object(
+        gb.asyncio, "sleep", AsyncMock()
+    ):
+        with pytest.raises(gb.GoogleBooksError):
+            await gb.fetch(title="Dune")

@@ -13,6 +13,7 @@ import { requestsApi, booksApi, directDownloadApi, calibreApi } from '@/lib/api'
 import { transformHardcoverBook } from '@/lib/hardcover';
 import { CalibreFormatActions } from '@/components/books/CalibreFormatActions';
 import { CalibreRelinkDialog } from '@/components/books/CalibreRelinkDialog';
+import { MetadataSourceDialog } from '@/components/books/MetadataSourceDialog';
 import { toast } from 'sonner';
 import { useUser } from '@/contexts/UserContext';
 import { usePageVisibility } from '@/hooks/usePageVisibility';
@@ -27,6 +28,7 @@ export default function BookDetails() {
   const [searchFormat, setSearchFormat] = useState<'ebook' | 'audiobook'>('ebook');
   const [searchSource, setSearchSource] = useState<'prowlarr' | 'direct' | undefined>(undefined);
   const [relinkOpen, setRelinkOpen] = useState(false);
+  const [sourcesOpen, setSourcesOpen] = useState(false);
   const queryClient = useQueryClient();
   const { user, isAdmin } = useUser();
   const isVisible = usePageVisibility();
@@ -39,11 +41,7 @@ export default function BookDetails() {
 
   const { data: dbBook } = useQuery({
     queryKey: ['book', 'by-hardcover', hardcoverId],
-    queryFn: async () => {
-      if (!hardcoverId) return null;
-      const books = await booksApi.getAll(0, 1000);
-      return books.find((b: any) => b.hardcover_id === hardcoverId) || null;
-    },
+    queryFn: () => booksApi.getByHardcoverId(hardcoverId as number),
     enabled: hasHardcoverId,
     staleTime: 30_000,
     refetchInterval: hasHardcoverId && isVisible ? 30_000 : false,
@@ -83,6 +81,12 @@ export default function BookDetails() {
     queryClient.invalidateQueries({ queryKey: ['calibre', 'by-hardcover', hardcoverId] });
     queryClient.invalidateQueries({ queryKey: ['hardcover', 'book', id] });
     queryClient.invalidateQueries({ queryKey: ['book', 'by-hardcover', hardcoverId] });
+    if (calibre) {
+      queryClient.invalidateQueries({ queryKey: ['calibre-cover', calibre.calibre_book_id] });
+      queryClient.invalidateQueries({
+        queryKey: ['calibre-metadata-candidates', calibre.calibre_book_id],
+      });
+    }
   };
   const calibreLinkMutation = useMutation({
     mutationFn: async (action: 'refresh' | 'unlink') => {
@@ -92,7 +96,7 @@ export default function BookDetails() {
     },
     onSuccess: (_d, action) => {
       invalidateCalibre();
-      toast.success(action === 'refresh' ? 'Metadata refreshed from Hardcover' : 'Calibre link removed');
+      toast.success(action === 'refresh' ? 'Metadata refreshed' : 'Calibre link removed');
     },
     onError: (err: Error) => toast.error('Action failed', { description: err.message }),
   });
@@ -250,6 +254,21 @@ export default function BookDetails() {
         : undefined;
   const hasAnyRequests = ebookRequested || audiobookRequested;
 
+  // Hardcover's record is sometimes sparse (no cover, no blurb). Fall back to
+  // the local Book row, which the merge job / source picker keeps filled.
+  const placeholderCover = !book.cover || book.cover === '/placeholder.svg';
+  const displayCover = (!placeholderCover ? book.cover : dbBook?.cover_url) || '/placeholder.svg';
+  const displayDescription =
+    book.description && book.description.trim() ? book.description : dbBook?.description || '';
+  const overlayGenres: string[] = Array.isArray(dbBook?.genres)
+    ? (dbBook!.genres as string[]).filter(Boolean)
+    : [];
+  const displayGenres = book.genres && book.genres.length > 0 ? book.genres : overlayGenres;
+  const displayRating = book.rating && book.rating > 0 ? book.rating : dbBook?.rating || 0;
+  const displayPageCount =
+    book.pageCount && book.pageCount > 0 ? book.pageCount : dbBook?.page_count || 0;
+  const displayPublishedDate = book.publishedDate || dbBook?.published_date || '';
+
   return (
     <>
       <div className="space-y-10 animate-fade-in-up">
@@ -293,7 +312,7 @@ export default function BookDetails() {
           {/* Blurred cover background – hidden on mobile for performance */}
           <div className="absolute inset-0 hidden md:block">
             <img
-              src={book.cover}
+              src={displayCover}
               alt=""
               className="h-full w-full object-cover opacity-20 blur-3xl scale-125"
             />
@@ -308,7 +327,7 @@ export default function BookDetails() {
               <div className="book-cover-glow">
                 <div className="book-cover w-52 md:w-64 aspect-[2/3]">
                   <img
-                    src={book.cover}
+                    src={displayCover}
                     alt={book.title}
                     className="h-full w-full object-cover"
                     onError={(e) => {
@@ -348,16 +367,16 @@ export default function BookDetails() {
               <div className="flex flex-wrap justify-center md:justify-start gap-5 text-sm">
                 <div className="flex items-center gap-2">
                   <Star className="h-4 w-4 fill-amber-400 text-amber-400" />
-                  <span className="font-semibold text-foreground">{formatRating(book.rating)}</span>
+                  <span className="font-semibold text-foreground">{formatRating(displayRating)}</span>
                 </div>
                 <div className="flex items-center gap-2 text-muted-foreground">
                   <Calendar className="h-4 w-4" />
-                  <span>{formatDate(book.publishedDate)}</span>
+                  <span>{formatDate(displayPublishedDate)}</span>
                 </div>
-                {book.pageCount && book.pageCount > 0 && (
+                {displayPageCount > 0 && (
                   <div className="flex items-center gap-2 text-muted-foreground">
                     <BookOpen className="h-4 w-4" />
-                    <span>{book.pageCount} pages</span>
+                    <span>{displayPageCount} pages</span>
                   </div>
                 )}
                 {book.isbn && (
@@ -368,9 +387,9 @@ export default function BookDetails() {
               </div>
 
               {/* Genres */}
-              {book.genres.length > 0 && (
+              {displayGenres.length > 0 && (
                 <div className="flex flex-wrap justify-center md:justify-start gap-2">
-                  {book.genres.map((genre) => (
+                  {displayGenres.map((genre) => (
                     <Badge
                       key={genre}
                       variant="secondary"
@@ -386,7 +405,7 @@ export default function BookDetails() {
               <div className="max-w-2xl">
                 <h2 className="text-lg font-semibold text-foreground mb-3">Description</h2>
                 <p className="text-muted-foreground leading-relaxed">
-                  {cleanDescription(book.description)}
+                  {cleanDescription(displayDescription)}
                 </p>
               </div>
 
@@ -439,7 +458,7 @@ export default function BookDetails() {
                     <Library className="h-4 w-4 text-primary" />
                     <h2 className="text-sm font-semibold text-foreground">In your library</h2>
                     {isAdmin && (
-                      <span className="ml-auto flex gap-1">
+                      <span className="ml-auto flex flex-wrap gap-1">
                         <Button
                           variant="ghost"
                           size="sm"
@@ -447,6 +466,14 @@ export default function BookDetails() {
                           onClick={() => calibreLinkMutation.mutate('refresh')}
                         >
                           Refresh
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          disabled={calibreLinkMutation.isPending}
+                          onClick={() => setSourcesOpen(true)}
+                        >
+                          Choose source
                         </Button>
                         <Button
                           variant="ghost"
@@ -671,6 +698,15 @@ export default function BookDetails() {
         />
       )}
 
+      {calibre && isAdmin && (
+        <MetadataSourceDialog
+          calibreId={calibre.calibre_book_id}
+          open={sourcesOpen}
+          onOpenChange={setSourcesOpen}
+          onApplied={invalidateCalibre}
+        />
+      )}
+
       <RequestDialog
         book={book}
         open={requestOpen}
@@ -690,14 +726,14 @@ export default function BookDetails() {
             title: book.title,
             author: book.author,
             isbn: book.isbn,
-            description: book.description,
-            cover: book.cover,
-            publishedDate: book.publishedDate,
-            rating: book.rating,
-            pageCount: book.pageCount,
+            description: displayDescription,
+            cover: displayCover,
+            publishedDate: displayPublishedDate,
+            rating: displayRating,
+            pageCount: displayPageCount,
             series: book.series,
             seriesPosition: book.seriesPosition,
-            genres: book.genres,
+            genres: displayGenres,
           }}
           open={searchOpen}
           onOpenChange={setSearchOpen}

@@ -343,6 +343,25 @@ export const discoverApi = {
     ),
 };
 
+/** A locally-stored Book row (subset used by the detail pages). */
+export interface LocalBook {
+  id: number;
+  title: string;
+  author: string;
+  isbn: string | null;
+  description: string | null;
+  cover_url: string | null;
+  published_date: string | null;
+  rating: number | null;
+  page_count: number | null;
+  hardcover_id: number | null;
+  series: string | null;
+  series_position: number | null;
+  genres: string[] | null;
+  ebook_available: boolean;
+  audiobook_available: boolean;
+}
+
 // Books API endpoints
 export const booksApi = {
   getAll: (skip: number = 0, limit: number = 100) =>
@@ -350,6 +369,15 @@ export const booksApi = {
 
   getById: (id: number) =>
     apiRequest<any>(`/api/books/${id}`),
+
+  /** Local Book row for a Hardcover id, or null if we have not saved it. */
+  getByHardcoverId: async (hardcoverId: number): Promise<LocalBook | null> => {
+    try {
+      return await apiRequest<LocalBook>(`/api/books/by-hardcover/${hardcoverId}`);
+    } catch {
+      return null;
+    }
+  },
 
   create: (book: any) =>
     apiRequest<any>('/api/books/', {
@@ -1365,6 +1393,36 @@ export interface CalibreBooksResponse {
   page_size: number;
 }
 
+export type MetadataSource = 'current' | 'googlebooks' | 'openlibrary' | 'hardcover';
+
+export interface MetadataCandidate {
+  source: MetadataSource;
+  found: boolean;
+  note: string | null;
+  title: string | null;
+  description: string | null;
+  cover_url: string | null;
+  page_count: number | null;
+  published_date: string | null;
+  rating: number | null;
+  ratings_count: number | null;
+  genres: string[];
+  series: string | null;
+  series_position: number | null;
+}
+
+export interface MetadataCandidatesResponse {
+  linked_book_id: number | null;
+  current: MetadataCandidate;
+  candidates: MetadataCandidate[];
+}
+
+export interface ApplyMetadataResponse {
+  linked_book_id: number;
+  hardcover_id: number | null;
+  current: MetadataCandidate;
+}
+
 export type CalibreSort = 'title' | 'author' | 'added' | 'pubdate';
 
 /** Fetch a binary endpoint with the bearer token and return it as a Blob. */
@@ -1385,6 +1443,19 @@ async function authedBlob(endpoint: string): Promise<Blob> {
     throw new Error(`Request failed: ${response.status}`);
   }
   return response.blob();
+}
+
+/** Fetch a binary endpoint and return it as a data: URL.
+ *  Unlike an object URL this needs no revoke and is safe to cache/share across
+ *  components and route changes. */
+async function authedDataUrl(endpoint: string): Promise<string> {
+  const blob = await authedBlob(endpoint);
+  return await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(reader.result as string);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
 }
 
 export const calibreApi = {
@@ -1414,6 +1485,8 @@ export const calibreApi = {
   getBook: (id: number) => apiRequest<CalibreBookDetail>(`/api/calibre/books/${id}`),
 
   fetchCover: (id: number) => authedBlob(`/api/calibre/books/${id}/cover`),
+
+  coverDataUrl: (id: number) => authedDataUrl(`/api/calibre/books/${id}/cover`),
 
   downloadFormat: async (id: number, format: string, filename?: string) => {
     const blob = await authedBlob(
@@ -1458,6 +1531,30 @@ export const calibreApi = {
   refreshMetadata: (id: number) =>
     apiRequest<CalibreLinkResponse>(`/api/calibre/books/${id}/refresh-metadata`, {
       method: 'POST',
+    }),
+
+  metadataCandidates: (id: number, opts?: { title?: string; author?: string }) => {
+    const q = new URLSearchParams();
+    if (opts?.title) q.set('title', opts.title);
+    if (opts?.author) q.set('author', opts.author);
+    const qs = q.toString();
+    return apiRequest<MetadataCandidatesResponse>(
+      `/api/calibre/books/${id}/metadata-candidates${qs ? `?${qs}` : ''}`,
+    );
+  },
+
+  applyMetadata: (
+    id: number,
+    body: {
+      source: Exclude<MetadataSource, 'current'>;
+      fields?: string[];
+      title?: string;
+      author?: string;
+    },
+  ) =>
+    apiRequest<ApplyMetadataResponse>(`/api/calibre/books/${id}/apply-metadata`, {
+      method: 'POST',
+      body: JSON.stringify(body),
     }),
 
   /** Resolve a Hardcover id to its linked Calibre library book, or null. */
