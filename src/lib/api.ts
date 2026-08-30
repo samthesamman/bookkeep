@@ -447,6 +447,9 @@ export const requestsApi = {
       ebook_readarr_book_id: number | null;
       audiobook_readarr_book_id: number | null;
       book_id: number | null;
+      // Whether the current user personally has an active request for this format.
+      ebook_mine?: boolean;
+      audiobook_mine?: boolean;
     }>(`/api/requests/by-hardcover/${hardcoverId}`),
 
   clearByHardcoverId: (hardcoverId: number, format?: 'ebook' | 'audiobook') =>

@@ -295,6 +295,54 @@ async def _fetch_abs_item(server: models.AudiobookshelfServer, item_id: str) -> 
     return response.json()
 
 
+def _link_book_to_calibre(db: Session, book: models.Book) -> None:
+    """Best-effort: link ``book`` to a matching Calibre library book.
+
+    Keeps the eBook (Calibre) and audiobook (Audiobookshelf) sides of the same
+    title on one record, so the book page shows the Calibre files / "email to
+    myself" and CalibreBookDetails redirects to the shared page. No-op when
+    there's no Calibre library, no match, or the book is already linked.
+    """
+    try:
+        from app.routers.calibre import get_active_library_path
+        from app.services import calibre_service, calibre_link_service
+
+        library_path = get_active_library_path(db)
+        if not library_path:
+            return
+
+        already = db.query(models.CalibreBookLink).filter(
+            models.CalibreBookLink.book_id == book.id
+        ).first()
+        if already:
+            return
+
+        match_id = calibre_service.find_book_match(
+            library_path, book.title, book.author, book.isbn
+        )
+        if not match_id:
+            return
+
+        calibre_link_service.upsert_link(
+            db,
+            calibre_book_id=match_id,
+            book_id=book.id,
+            source="fuzzy",
+            confirmed=False,
+            calibre_title=book.title,
+            commit=False,
+        )
+
+        formats = calibre_service.formats_for_ids(library_path, [match_id]).get(match_id, [])
+        kinds = {calibre_service.classify_format(f) for f in formats}
+        if "ebook" in kinds:
+            book.ebook_available = True
+        if "audiobook" in kinds:
+            book.audiobook_available = True
+    except Exception as exc:  # never let linking break the resolve
+        logger.warning("audiobookshelf_resolve_calibre_link_failed", book_id=book.id, error=str(exc))
+
+
 @router.get("/library/items/{item_id}/resolve")
 async def resolve_library_item(
     item_id: str,
@@ -346,6 +394,7 @@ async def resolve_library_item(
 
     book.audiobookshelf_id = item_id
     book.audiobook_available = True
+    _link_book_to_calibre(db, book)
     try:
         db.commit()
         db.refresh(book)

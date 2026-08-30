@@ -260,39 +260,40 @@ async def get_requests_for_hardcover_book(
 ):
     """Get all non-denied requests for a book by hardcover_id (to show which formats are already requested)"""
     cache_key = make_cache_key("requests_by_hardcover", hardcover_id=hardcover_id)
+
+    # The format-status portion is shared across users and safe to cache.
     cached = await get_cached(cache_key)
     if cached is not None:
-        return cached
-
-    # First find the book by hardcover_id
-    book = db.query(models.Book).filter(models.Book.hardcover_id == hardcover_id).first()
-    
-    if not book:
-        # No book in database yet, so no requests exist
-        result = {"ebook": None, "audiobook": None, "book_id": None}
+        result = dict(cached)
+    else:
+        book = db.query(models.Book).filter(models.Book.hardcover_id == hardcover_id).first()
+        if not book:
+            result = {"ebook": None, "audiobook": None, "book_id": None}
+        else:
+            requests = db.query(models.BookRequest).filter(
+                models.BookRequest.book_id == book.id,
+                models.BookRequest.status != "denied"
+            ).all()
+            result = {"ebook": None, "audiobook": None, "book_id": book.id}
+            for r in requests:
+                result[r.format] = r.status
         await set_cached(cache_key, result, ttl=CACHE_TTL.get("requests_by_hardcover", 30))
-        return result
-    
-    requests = db.query(models.BookRequest).filter(
-        models.BookRequest.book_id == book.id,
-        models.BookRequest.status != "denied"
-    ).all()
-    
-    # Build a response with format status
-    result = {
-        "ebook": None,
-        "audiobook": None,
-        "book_id": book.id,
-    }
-    for r in requests:
-        result[r.format] = r.status
-    
-    logger.debug("requests_for_hardcover_book", 
-                hardcover_id=hardcover_id, 
-                book_id=book.id,
-                ebook=result["ebook"], 
-                audiobook=result["audiobook"])
-    await set_cached(cache_key, result, ttl=CACHE_TTL.get("requests_by_hardcover", 30))
+
+    # Whether *this* user owns an active request for each format — computed
+    # per-request (never from the shared cache) so the UI only offers to
+    # cancel a request the caller actually made.
+    result["ebook_mine"] = False
+    result["audiobook_mine"] = False
+    if result.get("book_id"):
+        mine = db.query(models.BookRequest.format).filter(
+            models.BookRequest.book_id == result["book_id"],
+            models.BookRequest.user_id == current_user.id,
+            models.BookRequest.status != "denied",
+        ).all()
+        for (fmt,) in mine:
+            if fmt in ("ebook", "audiobook"):
+                result[f"{fmt}_mine"] = True
+
     return result
 
 

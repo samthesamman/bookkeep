@@ -291,6 +291,10 @@ export default function BookDetails() {
         ? 'ebook'
         : undefined;
   const hasAnyRequests = ebookRequested || audiobookRequested;
+  // Only offer "clear request" to someone who can actually act on it: an admin
+  // (clears everyone's) or a user who made one of these requests themselves.
+  const ownsARequest = Boolean(requestStatus?.ebook_mine || requestStatus?.audiobook_mine);
+  const canClearRequests = isAdmin || ownsARequest;
 
   // The "local" view: the Calibre overlay for a linked book (what My Books
   // shows), else the local Book row. When it exists and either the book is in
@@ -662,7 +666,7 @@ export default function BookDetails() {
                     </a>
                   </Button>
                 )}
-                {hasAnyRequests && (
+                {hasAnyRequests && canClearRequests && (
                   <Button
                     size="lg"
                     variant="outline"
@@ -671,7 +675,11 @@ export default function BookDetails() {
                     className="h-12 px-6 rounded-xl border-rose-500/30 text-rose-400 hover:bg-rose-500/10 hover:border-rose-500/50"
                   >
                     <Trash2 className="h-4 w-4 mr-2" />
-                    {clearRequestsMutation.isPending ? 'Clearing...' : 'Clear Request'}
+                    {clearRequestsMutation.isPending
+                      ? 'Clearing...'
+                      : isAdmin
+                        ? 'Clear Request'
+                        : 'Cancel My Request'}
                   </Button>
                 )}
               </div>

@@ -72,8 +72,11 @@ function AudiobookCard({ item }: { item: AudiobookshelfLibraryItem }) {
         state: { from: '/my-audiobooks', fromLabel: 'Back to My Audiobooks' },
       });
 
+    // Already matched: open straight away, but still fire resolve in the
+    // background so the book gets linked to its Calibre eBook (if any).
     if (item.hardcover_id) {
       nav(item.hardcover_id);
+      void audiobookshelfApi.resolveItem(item.id).catch(() => {});
       return;
     }
 
