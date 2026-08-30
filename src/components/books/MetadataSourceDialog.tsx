@@ -262,9 +262,9 @@ export function MetadataSourceDialog({
           <DialogDescription>
             What each source returns for this book. “Use this” overwrites the
             stored record — title, author, description, cover, length, subjects
-            (series and rating only come from Hardcover; publisher and ISBN are
-            shown for comparison but not stored). Edit the search title first if
-            the stored one is wrong.
+            (series and rating come from Hardcover; ISBN is filled only if the
+            book has none; publisher is shown for comparison only). Edit the
+            search title first if the stored one is wrong.
           </DialogDescription>
         </DialogHeader>
 

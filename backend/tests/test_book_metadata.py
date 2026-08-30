@@ -118,6 +118,26 @@ def test_apply_source_keeps_existing_cover_when_chosen_source_has_none():
     assert b.description == "d"
 
 
+def test_apply_source_isbn_is_fill_only():
+    b = Book(title="Dune", author="Frank Herbert")
+    bm.apply_source(b, "googlebooks", {"isbn": "9780441013593"})
+    assert b.isbn == "9780441013593"
+
+    b2 = Book(title="Dune", author="Frank Herbert", isbn="1111111111111")
+    bm.apply_source(b2, "googlebooks", {"isbn": "9780441013593"})
+    assert b2.isbn == "1111111111111"  # not replaced — editions differ
+
+
+def test_backfill_isbn_prefers_apple_and_fills_only():
+    b = Book(title="Dune", author="Frank Herbert")
+    changed = bm._backfill_isbn(None, b, _sources(ol={"isbn": "OL"}, ab={"isbn": "AB"}))
+    assert changed and b.isbn == "AB"
+
+    b2 = Book(title="Dune", author="Frank Herbert", isbn="existing")
+    assert bm._backfill_isbn(None, b2, _sources(ab={"isbn": "AB"})) is False
+    assert b2.isbn == "existing"
+
+
 # --------------------------------------------------------------------------- #
 # enrich_book
 # --------------------------------------------------------------------------- #

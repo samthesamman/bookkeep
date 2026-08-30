@@ -211,14 +211,40 @@ async def enrich_book(
             book.hardcover_slug = hc_src.get("hardcover_slug") or book.hardcover_slug
             changed = True
 
+    changed = _backfill_isbn(db, book, sources) or changed
     changed = _merge(book, sources, overwrite=overwrite) or changed
     return changed
+
+
+def _backfill_isbn(db, book, sources: dict[str, dict]) -> bool:
+    """Fill an empty ``book.isbn`` from a source, if no other row already has it.
+
+    Fill-only — editions have different ISBNs, so we never replace one. Priority
+    matches the cover priority (Apple's matched edition first).
+    """
+    from app.models import Book
+
+    if getattr(book, "isbn", None):
+        return False
+    for key in ("ab", "hc", "gb", "ol"):
+        isbn = ((sources.get(key) or {}).get("isbn") or "").strip()
+        if not isbn:
+            continue
+        clash = (
+            db.query(Book).filter(Book.isbn == isbn).first() if db is not None else None
+        )
+        if clash is None or clash.id == getattr(book, "id", None):
+            book.isbn = isbn
+            return True
+        return False
+    return False
 
 
 _SOURCE_KEY = {"googlebooks": "gb", "openlibrary": "ol", "hardcover": "hc", "applebooks": "ab"}
 APPLYABLE_FIELDS = (
     "title",
     "author",
+    "isbn",
     "description",
     "cover_url",
     "page_count",
@@ -290,6 +316,12 @@ def apply_source(
     new_author = data.get("author")
     if "author" in wanted and new_author and book.author != new_author:
         book.author = new_author
+        changed = True
+    # ISBN: fill-only (editions differ). The router (apply_metadata) checks for a
+    # unique-constraint clash before it commits.
+    new_isbn = (data.get("isbn") or "").strip()
+    if "isbn" in wanted and new_isbn and not getattr(book, "isbn", None):
+        book.isbn = new_isbn
         changed = True
 
     if key == "hc" and data.get("hardcover_id") and not getattr(book, "hardcover_id", None):

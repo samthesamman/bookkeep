@@ -755,7 +755,20 @@ async def apply_metadata(
     # An explicit pick makes this source authoritative for the book, so adopt its
     # title too (the auto-enrich path never renames — only this endpoint does).
     fields = body.fields if body.fields is not None else list(book_metadata.APPLYABLE_FIELDS)
+    orig_isbn = book.isbn
     book_metadata.apply_source(book, body.source, data, fields=fields, overwrite=True)
+
+    # `Book.isbn` is unique — back out a newly-adopted ISBN that another row has.
+    if book.isbn and book.isbn != orig_isbn:
+        dup = (
+            db.query(models.Book)
+            .filter(models.Book.isbn == book.isbn, models.Book.id != book.id)
+            .first()
+        )
+        if dup is not None:
+            logger.info("calibre_metadata_isbn_clash", book_id=book.id, isbn=book.isbn)
+            book.isbn = orig_isbn
+
     book.last_refreshed = datetime.now(timezone.utc)
     book.metadata_locked = True  # keep a later Hardcover fetch from stomping this
 
