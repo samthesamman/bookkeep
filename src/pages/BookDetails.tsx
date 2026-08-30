@@ -108,9 +108,11 @@ export default function BookDetails() {
     enabled: !!calibre?.calibre_book_id,
     staleTime: 30_000,
   });
+  // The chosen metadata source's cover (overlay_cover_url) wins; fall back to
+  // Calibre's embedded cover only when the source didn't provide one.
   const { data: calFileCover } = useCalibreCover(
     calibre?.calibre_book_id ?? 0,
-    !!calBook?.has_cover && !calBook?.overlay_cover_url && !calBook?.metadata_locked,
+    !!calBook?.has_cover && !calBook?.overlay_cover_url,
   );
 
   const invalidateCalibre = () => {

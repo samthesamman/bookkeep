@@ -89,6 +89,20 @@ def test_merge_overwrite_replaces():
     assert b.description == "GB blurb"
 
 
+def test_merge_overwrite_keeps_existing_when_source_field_is_empty():
+    # Picking a source that has no cover must not wipe the current one.
+    b = Book(title="Dune", author="Frank Herbert", cover_url="existing.jpg")
+    bm._merge(b, _sources(ol={"description": "d", "cover_url": None}), overwrite=True)
+    assert b.cover_url == "existing.jpg"
+
+
+def test_apply_source_keeps_existing_cover_when_chosen_source_has_none():
+    b = Book(title="Dune", author="Frank Herbert", cover_url="existing.jpg")
+    bm.apply_source(b, "openlibrary", {"description": "d", "cover_url": None})
+    assert b.cover_url == "existing.jpg"
+    assert b.description == "d"
+
+
 # --------------------------------------------------------------------------- #
 # enrich_book
 # --------------------------------------------------------------------------- #

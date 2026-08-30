@@ -34,11 +34,9 @@ const SORT_OPTIONS: { value: CalibreSort; label: string }[] = [
 
 /** Cover image fetched with the auth token (data URL — see useCalibreCover). */
 function CalibreCover({ book }: { book: CalibreBook }) {
-  // A locked book uses its chosen source's cover only — never Calibre's embedded one.
-  const { data: url } = useCalibreCover(
-    book.id,
-    book.has_cover && !book.overlay_cover_url && !book.metadata_locked,
-  );
+  // The chosen metadata source's cover wins (overlay_cover_url); fall back to
+  // Calibre's embedded cover only when the source didn't provide one.
+  const { data: url } = useCalibreCover(book.id, book.has_cover && !book.overlay_cover_url);
 
   if (book.overlay_cover_url) {
     return (

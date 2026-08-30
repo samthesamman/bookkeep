@@ -66,9 +66,11 @@ export default function CalibreBookDetails() {
     enabled: Number.isFinite(calibreId),
   });
 
+  // The chosen metadata source's cover wins; fall back to Calibre's embedded
+  // cover only when the source didn't provide one.
   const { data: coverUrl } = useCalibreCover(
     calibreId,
-    !!book?.has_cover && !book?.overlay_cover_url && !book?.metadata_locked,
+    !!book?.has_cover && !book?.overlay_cover_url,
   );
 
   const invalidate = () => {
