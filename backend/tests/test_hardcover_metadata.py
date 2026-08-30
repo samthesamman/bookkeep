@@ -1,9 +1,10 @@
-"""Tests for app.services.hardcover_metadata.apply_hardcover_metadata."""
-from app.models import Book
-from app.services.hardcover_metadata import apply_hardcover_metadata
+"""Tests for app.services.hardcover_metadata.normalize."""
+from app.services.hardcover_metadata import normalize
 
 _PAYLOAD = {
     "id": 42,
+    "slug": "dune",
+    "title": "Dune",
     "description": "A desert epic.",
     "pages": 604,
     "rating": 4.25,
@@ -15,35 +16,33 @@ _PAYLOAD = {
 }
 
 
-def test_fills_empty_fields():
-    b = Book(title="Dune", author="Frank Herbert")
-    assert apply_hardcover_metadata(b, _PAYLOAD) is True
-    assert b.description == "A desert epic."
-    assert b.page_count == 604
-    assert b.rating == 4.25
-    assert b.cover_url == "http://img/dune.jpg"
-    assert b.series == "Dune" and b.series_id == 7 and b.series_position == 1.0
-    assert b.genres == "Sci-Fi, Classic"
-    assert b.published_date == "1965-08-01"
-    assert b.last_refreshed is not None
+def test_normalize_maps_fields():
+    out = normalize(_PAYLOAD)
+    assert out["description"] == "A desert epic."
+    assert out["cover_url"] == "http://img/dune.jpg"
+    assert out["page_count"] == 604
+    assert out["published_date"] == "1965-08-01"
+    assert out["rating"] == 4.25
+    assert out["ratings_count"] == 1000
+    assert out["genres"] == ["Sci-Fi", "Classic"]
+    assert out["series"] == "Dune"
+    assert out["series_id"] == 7
+    assert out["series_position"] == 1.0
+    assert out["hardcover_id"] == 42
+    assert out["hardcover_slug"] == "dune"
 
 
-def test_does_not_overwrite_by_default():
-    b = Book(title="Dune", author="Frank Herbert", description="mine", rating=3.0)
-    apply_hardcover_metadata(b, _PAYLOAD)
-    assert b.description == "mine"
-    assert b.rating == 3.0
-    assert b.page_count == 604  # still fills the empty one
+def test_normalize_published_date_falls_back_to_year():
+    out = normalize({"id": 1, "release_year": 1965})
+    assert out["published_date"] == "1965"
 
 
-def test_overwrite_true_replaces():
-    b = Book(title="Dune", author="Frank Herbert", description="mine", rating=3.0)
-    apply_hardcover_metadata(b, _PAYLOAD, overwrite=True)
-    assert b.description == "A desert epic."
-    assert b.rating == 4.25
+def test_normalize_without_series_omits_series_keys():
+    out = normalize({"id": 1, "title": "Standalone"})
+    assert "series" not in out
+    assert out["genres"] == []
 
 
-def test_empty_payload_is_noop():
-    b = Book(title="Dune", author="Frank Herbert")
-    assert apply_hardcover_metadata(b, {}) is False
-    assert b.last_refreshed is None
+def test_normalize_empty_is_empty_dict():
+    assert normalize(None) == {}
+    assert normalize({}) == {}

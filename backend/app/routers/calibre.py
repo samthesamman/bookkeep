@@ -430,10 +430,10 @@ async def set_book_link(
         book.audiobook_available = True
     db.commit()
 
-    from app.services.hardcover_metadata import enrich_book_from_hardcover
+    from app.services.book_metadata import enrich_book
 
     try:
-        await enrich_book_from_hardcover(db, book)
+        await enrich_book(db, book, overwrite=True, resolve_hardcover=True, use_google=True)
         if book.last_refreshed is None:
             from datetime import datetime, timezone
 
@@ -519,22 +519,22 @@ async def refresh_book_metadata(
     db: Session = Depends(get_db),
     _: models.User = Depends(require_admin),
 ):
-    """Re-fetch Hardcover metadata for the Book linked to this Calibre book."""
+    """Re-fetch metadata (Open Library + Hardcover) for the Book linked to this Calibre book."""
     link = calibre_link_service.get_links_for_calibre_ids(db, [book_id]).get(book_id)
     if link is None or link.book is None:
         raise HTTPException(status_code=404, detail="This book is not linked yet")
 
-    from app.services.hardcover_metadata import enrich_book_from_hardcover
+    from app.services.book_metadata import enrich_book
     from datetime import datetime, timezone
 
     book = link.book
     try:
-        await enrich_book_from_hardcover(db, book, overwrite=True)
+        await enrich_book(db, book, overwrite=True, resolve_hardcover=True, use_google=True)
         book.last_refreshed = datetime.now(timezone.utc)
         db.commit()
     except Exception as exc:
         db.rollback()
-        raise HTTPException(status_code=502, detail=f"Hardcover refresh failed: {exc}")
+        raise HTTPException(status_code=502, detail=f"Metadata refresh failed: {exc}")
 
     return LinkResponse(
         linked_book_id=book.id,

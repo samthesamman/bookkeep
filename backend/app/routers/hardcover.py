@@ -804,6 +804,65 @@ async def lookup_book_by_slug(slug: str, db: Session = None) -> Optional[dict]:
         return None
 
 
+async def lookup_book_by_id(book_id: int, db: Session = None) -> Optional[dict]:
+    """Look up a book on Hardcover by its numeric id and return full book data.
+
+    Same payload shape as :func:`lookup_book_by_slug`. Returns None if not found.
+    """
+    query = """
+    query GetBookById($id: Int!) {
+      books(where: {id: {_eq: $id}}, limit: 1) {
+        id
+        title
+        slug
+        release_year
+        release_date
+        pages
+        description
+        cached_image
+        cached_contributors
+        rating
+        ratings_count
+        users_count
+        activities_count
+        default_ebook_edition_id
+        default_audio_edition_id
+        default_physical_edition_id
+        book_series {
+          position
+          series {
+            id
+            name
+          }
+        }
+        contributions {
+          author {
+            id
+            name
+            slug
+          }
+        }
+        taggings(limit: 10) {
+          tag {
+            tag
+          }
+        }
+      }
+    }
+    """
+
+    try:
+        result = await execute_graphql(query, {"id": int(book_id)}, db)
+        books = result.get("books", [])
+        if books:
+            return books[0]
+        logger.warning("hardcover_book_not_found_by_id", hardcover_id=book_id)
+        return None
+    except Exception as e:
+        logger.error("hardcover_lookup_by_id_error", hardcover_id=book_id, error=str(e))
+        return None
+
+
 async def lookup_book_by_title_author(title: str, author: str = None, db: Session = None) -> Optional[dict]:
     """
     Search for a book on Hardcover by title and optionally author.

@@ -344,12 +344,15 @@ async def run_background_refresh():
 EBOOK_LIBRARY_WAIT_TIMEOUT = timedelta(days=7)
 
 
-def reconcile_ebook_library_imports(db: Session, library_path: Optional[str] = None) -> int:
+def reconcile_ebook_library_imports(
+    db: Session, library_path: Optional[str] = None
+) -> list[int]:
     """Promote completed ebook downloads to 'imported' once Calibre has indexed them.
 
     The orchestrator parks ebook imports in 'awaiting_library' when a Calibre
     library is configured; this checks that library for each one and flips it to
-    'imported' (also marking the book available). Returns the number promoted.
+    'imported' (also marking the book available). Returns the ``book_id``s that
+    were just promoted, so the caller can refresh their metadata.
     """
     from app.models import DownloadTask
     from app.routers.calibre import get_active_library_path
@@ -365,7 +368,7 @@ def reconcile_ebook_library_imports(db: Session, library_path: Optional[str] = N
         .all()
     )
     if not tasks:
-        return 0
+        return []
 
     if library_path is None:
         library_path = get_active_library_path(db)
@@ -383,7 +386,7 @@ def reconcile_ebook_library_imports(db: Session, library_path: Optional[str] = N
             logger.warning("ebook_library_reconcile_lookup_failed", error=str(exc))
 
     now = datetime.now(timezone.utc)
-    promoted = 0
+    promoted: list[int] = []
     for task in tasks:
         found = matched_ids.get(task.id) is not None
 
@@ -422,7 +425,8 @@ def reconcile_ebook_library_imports(db: Session, library_path: Optional[str] = N
                 )
             except Exception as exc:  # never block the import promotion
                 logger.warning("calibre_link_on_import_failed", task_id=task.id, error=str(exc))
-        promoted += 1
+        if task.book_id is not None:
+            promoted.append(task.book_id)
         logger.info(
             "ebook_import_confirmed",
             task_id=task.id,
@@ -432,8 +436,49 @@ def reconcile_ebook_library_imports(db: Session, library_path: Optional[str] = N
 
     if promoted:
         db.commit()
-        logger.info("reconcile_ebook_library_imports_complete", promoted=promoted, checked=len(tasks))
+        logger.info(
+            "reconcile_ebook_library_imports_complete",
+            promoted=len(promoted),
+            checked=len(tasks),
+        )
     return promoted
+
+
+async def _refresh_downloaded_books(db: Session, book_ids) -> None:
+    """One-time, best-quality metadata refresh for books that just became available.
+
+    Runs the full merge (Google Books description, Hardcover ratings/series, Open
+    Library fallback) with overwrite, so a downloaded book stops carrying
+    whatever thin blurb it had from being browsed pre-download. Called only on
+    the state transition, so it is cheap on the APIs.
+    """
+    if not book_ids:
+        return
+
+    from app.models import Book
+    from app.services import book_metadata
+
+    seen: set[int] = set()
+    for bid in book_ids:
+        if bid is None or bid in seen:
+            continue
+        seen.add(bid)
+        book = db.query(Book).filter(Book.id == bid).first()
+        if book is None:
+            continue
+        try:
+            changed = await book_metadata.enrich_book(
+                db, book, overwrite=True, resolve_hardcover=True, use_google=True
+            )
+            if book.last_refreshed is None:
+                book.last_refreshed = datetime.now(timezone.utc)
+            db.commit()
+            if changed:
+                logger.info("downloaded_book_metadata_refreshed", book_id=bid)
+        except Exception as exc:
+            db.rollback()
+            logger.warning("downloaded_book_metadata_refresh_failed", book_id=bid, error=str(exc))
+        await asyncio.sleep(0.3)
 
 
 async def check_processing_requests():
@@ -443,11 +488,13 @@ async def check_processing_requests():
     try:
         # Belt-and-suspenders: reconcile_calibre_library also does this every
         # minute, but keep a slower fallback in case that job is disabled.
+        promoted: list[int] = []
         try:
-            reconcile_ebook_library_imports(db)
+            promoted = reconcile_ebook_library_imports(db)
         except Exception as e:
             logger.error("reconcile_ebook_library_imports_error", error=str(e))
             db.rollback()
+        await _refresh_downloaded_books(db, promoted)
         await update_processing_requests_status(db)
     except Exception as e:
         logger.error("check_processing_requests_error", error=str(e))
@@ -475,8 +522,9 @@ async def reconcile_calibre_library():
         if not library_path:
             return
 
+        promoted: list[int] = []
         try:
-            reconcile_ebook_library_imports(db, library_path=library_path)
+            promoted = reconcile_ebook_library_imports(db, library_path=library_path)
         except Exception as e:
             logger.error("reconcile_ebook_library_imports_error", error=str(e))
             db.rollback()
@@ -512,16 +560,15 @@ async def reconcile_calibre_library():
             .all()
         )
         reqs = [r for r in reqs if r.book]
-        if not reqs:
-            return
 
-        try:
-            matches = calibre_service.match_books(
-                library_path, [(r.book.title, r.book.author, r.book.isbn) for r in reqs]
-            )
-        except calibre_service.CalibreError as exc:
-            logger.warning("reconcile_calibre_library_lookup_failed", error=str(exc))
-            return
+        matches = []
+        if reqs:
+            try:
+                matches = calibre_service.match_books(
+                    library_path, [(r.book.title, r.book.author, r.book.isbn) for r in reqs]
+                )
+            except calibre_service.CalibreError as exc:
+                logger.warning("reconcile_calibre_library_lookup_failed", error=str(exc))
 
         now = datetime.now(timezone.utc)
         updated = 0
@@ -533,6 +580,7 @@ async def reconcile_calibre_library():
             req.updated_at = now
             req.book.ebook_available = True
             updated += 1
+            promoted.append(req.book_id)
             # A request that resolved to a library book is a strong link.
             try:
                 calibre_link_service.upsert_link(
@@ -558,6 +606,8 @@ async def reconcile_calibre_library():
         if updated:
             db.commit()
             logger.info("reconcile_calibre_library_complete", updated=updated, checked=len(reqs))
+
+        await _refresh_downloaded_books(db, promoted)
     except Exception as e:
         logger.error("reconcile_calibre_library_error", error=str(e))
         db.rollback()
@@ -573,24 +623,25 @@ LINK_MAINTENANCE_INTERVAL = timedelta(minutes=10)
 _LAST_LINK_MAINTENANCE = datetime.min.replace(tzinfo=timezone.utc)
 
 
-# Cap the daily/startup Calibre metadata sweep so one run cannot hammer the
-# Hardcover API for hours on a very large library. Whatever is left over is
+# Cap the daily/startup Calibre metadata sweep so one run stays polite to the
+# upstream metadata APIs on a very large library. Whatever is left over is
 # picked up on the next run (and by the per-minute reconcile batch in between).
 CALIBRE_METADATA_SCAN_LIMIT = 400
 
 
 async def _enrich_calibre_metadata(db: Session, *, limit: int) -> int:
-    """Fill in Hardcover metadata for linked Calibre books that are missing it.
+    """Fill in metadata for linked Calibre books that are missing it.
 
     Shared by the per-minute reconcile pass (small batch) and the
     ``sync_calibre_metadata`` job (full sweep). Targets linked books with a gap
     in the fields the overlay shows — description, cover, genres — or that have
-    never been refreshed. Uses the full detail data path. Honors the overlay
-    toggle. One Hardcover lookup at a time with a short pause between books.
+    never been refreshed. Metadata comes from Open Library plus Hardcover (for
+    linked books); Google Books is left for the post-download refresh so this
+    sweep does not spend its daily quota. Honors the overlay toggle. One book at
+    a time with a short pause between lookups.
     """
     from app.routers.calibre import _bool_setting, OVERLAY_ENABLED_KEY
-    from app.services import calibre_link_service
-    from app.services.hardcover_metadata import enrich_book_from_hardcover
+    from app.services import book_metadata, calibre_link_service
 
     if not _bool_setting(db, OVERLAY_ENABLED_KEY, True):
         return 0
@@ -603,7 +654,7 @@ async def _enrich_calibre_metadata(db: Session, *, limit: int) -> int:
     for link in rows:
         book = link.book
         try:
-            ok = await enrich_book_from_hardcover(db, book)
+            ok = await book_metadata.enrich_book(db, book)
         except Exception as exc:
             logger.warning("calibre_book_enrich_failed", book_id=book.id, error=str(exc))
             db.rollback()
@@ -633,24 +684,17 @@ async def _enrich_linked_calibre_books(db: Session) -> int:
 async def _import_unlinked_calibre_books(
     db: Session, library_path: str, *, limit: int
 ) -> int:
-    """Resolve Calibre books that have no ``Book`` row at all against Hardcover.
+    """Give a ``Book`` row + metadata to Calibre books that have neither.
 
     ``backfill_fuzzy_links`` only links library books that already match a row in
     our ``books`` table, so a side-loaded book we have never seen stays
-    "metadata from Calibre only" forever. This searches Hardcover by
-    title/author, and — when the returned title is a real match — creates the
-    ``Book`` row, links it, and enriches it. Bounded per run.
+    "metadata from Calibre only" forever. For each such book this creates the
+    ``Book`` row from the Calibre identity, enriches it (Open Library, then
+    Hardcover), and — only if something was actually found — links it. Bounded
+    per run.
     """
-    from app.routers.hardcover import lookup_book_by_title_author
-    from app.routers.settings import get_hardcover_token
-    from app.services import calibre_service, calibre_link_service
-    from app.services.hardcover_metadata import enrich_book_from_hardcover
+    from app.services import book_metadata, calibre_service, calibre_link_service
     from app.models import Book, CalibreBookLink
-
-    token, _src = get_hardcover_token(db)
-    if not token:
-        logger.info("calibre_metadata_import_skipped", reason="no_hardcover_token")
-        return 0
 
     try:
         library_ids = calibre_service.existing_book_ids(library_path)
@@ -674,40 +718,16 @@ async def _import_unlinked_calibre_books(
     for cal_id, title, author, isbn in identities:
         if not title:
             continue
-        try:
-            hc = await lookup_book_by_title_author(title, author, db)
-        except Exception as exc:
-            logger.warning(
-                "calibre_metadata_lookup_failed", calibre_id=cal_id, title=title, error=str(exc)
-            )
-            hc = None
-        await asyncio.sleep(0.5)
-
-        if not hc or not hc.get("id"):
-            continue
-
-        # Guard against a wrong search hit polluting a library book.
-        want_tokens = calibre_service._title_tokens(title)
-        got_tokens = calibre_service._title_tokens(hc.get("title") or "")
-        if want_tokens and not calibre_service._titles_match(want_tokens, got_tokens):
-            logger.info(
-                "calibre_metadata_title_mismatch",
-                calibre_id=cal_id,
-                calibre_title=title,
-                hardcover_title=hc.get("title"),
-            )
-            continue
 
         kinds = {calibre_service.classify_format(f) for f in fmt_map.get(cal_id, [])}
-        hc_id = hc["id"]
-        book = db.query(Book).filter(Book.hardcover_id == hc_id).first()
+
+        book = db.query(Book).filter(Book.isbn == isbn).first() if isbn else None
+        fresh_row = book is None
         if book is None:
             book = Book(
                 title=title,
-                author=author or None,
+                author=author or "Unknown Author",
                 isbn=isbn or None,
-                hardcover_id=hc_id,
-                hardcover_slug=hc.get("slug"),
                 ebook_available="ebook" in kinds,
                 audiobook_available="audiobook" in kinds,
             )
@@ -724,6 +744,20 @@ async def _import_unlinked_calibre_books(
                 )
                 continue
 
+        try:
+            found = await book_metadata.enrich_book(db, book, resolve_hardcover=True)
+        except Exception as exc:
+            logger.warning("calibre_metadata_enrich_failed", calibre_id=cal_id, error=str(exc))
+            db.rollback()
+            continue
+
+        if fresh_row and not found and not book.hardcover_id:
+            # Nothing to show for this book — leave it "Calibre only" rather than
+            # keeping a bare linked row that looks enriched but is not.
+            db.rollback()
+            await asyncio.sleep(0.5)
+            continue
+
         calibre_link_service.upsert_link(
             db,
             calibre_book_id=cal_id,
@@ -735,13 +769,6 @@ async def _import_unlinked_calibre_books(
             calibre_title=title,
             commit=False,
         )
-
-        try:
-            await enrich_book_from_hardcover(db, book)
-        except Exception as exc:
-            logger.warning("calibre_metadata_enrich_failed", book_id=book.id, error=str(exc))
-            db.rollback()
-            continue
         if book.last_refreshed is None:
             book.last_refreshed = datetime.now(timezone.utc)
         try:
@@ -749,7 +776,7 @@ async def _import_unlinked_calibre_books(
             created += 1
         except Exception as exc:
             db.rollback()
-            logger.warning("calibre_metadata_commit_failed", book_id=book.id, error=str(exc))
+            logger.warning("calibre_metadata_commit_failed", calibre_id=cal_id, error=str(exc))
         await asyncio.sleep(0.5)
 
     if created:
@@ -763,12 +790,13 @@ async def sync_calibre_metadata() -> None:
     """Batch-fetch missing metadata for Calibre library books.
 
     Runs on startup and once a day (and can be triggered from the admin Jobs
-    page). Three passes, each bounded per run:
+    page). Metadata comes from Open Library first (no API key, no rate limit),
+    then Hardcover for series / ratings / anything still missing. Three passes,
+    each bounded per run:
 
     1. Link library books that match a ``Book`` row we already have.
-    2. Resolve library books with no ``Book`` row at all against Hardcover,
-       creating and linking them (this is what clears "metadata from Calibre
-       only").
+    2. Give a ``Book`` row + metadata to library books that have neither,
+       then link them (this is what clears "metadata from Calibre only").
     3. Refresh linked books whose local metadata is absent or stale-incomplete.
     """
     from app.routers.calibre import get_active_library_path, _bool_setting, OVERLAY_ENABLED_KEY
