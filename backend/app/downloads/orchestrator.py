@@ -38,6 +38,26 @@ def _calibre_library_active(db: Session) -> bool:
     return bool(row and row.enabled and row.library_path)
 
 
+# Extensions treated as audiobook tracks when laying out an import. Everything
+# else in a release (artwork, .nfo, .cue, samples) is left behind.
+AUDIO_EXTENSIONS = {
+    ".mp3", ".m4a", ".m4b", ".flac", ".ogg", ".opus", ".aac", ".wma",
+}
+
+
+def _sanitize_path_component(name: str) -> str:
+    """Make a string safe to use as a single file or folder name."""
+    import re
+
+    name = (name or "").strip()
+    # Drop characters that are illegal or awkward on common filesystems
+    name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "", name)
+    name = re.sub(r"\s+", " ", name).strip()
+    # Windows dislikes trailing dots/spaces
+    name = name.rstrip(". ")
+    return name or "Unknown"
+
+
 class DownloadOrchestrator:
     """
     Orchestrates book downloads from search to completion.
@@ -469,6 +489,13 @@ class DownloadOrchestrator:
                     format=task.format,
                     message=f"No destination path configured for {task.format}. Files will remain in download client location."
                 )
+                # Audiobooks can't be laid out without a media path — fail loudly
+                # rather than leaving the task stuck in 'importing' forever.
+                if task.format == "audiobook":
+                    task.import_status = 'failed'
+                    task.import_message = 'No Audiobook Media Path configured'
+                    db.commit()
+                    return None
                 return source_path
 
             dest_base = setting.value
@@ -498,6 +525,13 @@ class DownloadOrchestrator:
                 db.commit()
                 return None
 
+            # Audiobooks are laid out Audiobookshelf-style and only the audio
+            # files are carried over (see _import_audiobook).
+            if task.format == "audiobook":
+                return self._import_audiobook(
+                    task, source, dest_base, db, self._use_hardlinks(task, db)
+                )
+
             # Determine destination name
             if source.is_file():
                 dest_name = source.name
@@ -521,19 +555,7 @@ class DownloadOrchestrator:
                 )
                 return str(dest_path)
 
-            # Check if hardlinks are enabled — prefer format-specific setting,
-            # fall back to the global "use_hardlinks" (default: true)
-            format_key = f"use_hardlinks_{task.format}"  # e.g. "use_hardlinks_ebook"
-            format_setting = db.query(AppSettings).filter(
-                AppSettings.key == format_key
-            ).first()
-            if format_setting is not None:
-                use_hardlinks = format_setting.value != "false"
-            else:
-                global_setting = db.query(AppSettings).filter(
-                    AppSettings.key == "use_hardlinks"
-                ).first()
-                use_hardlinks = not (global_setting and global_setting.value == "false")
+            use_hardlinks = self._use_hardlinks(task, db)
 
             if use_hardlinks:
                 # Try to hardlink first (fast, no extra space), fall back to copy
@@ -617,6 +639,128 @@ class DownloadOrchestrator:
             task.import_message = f'Import failed: {str(e)}'
             db.commit()
             return None
+
+    def _use_hardlinks(self, task: DownloadTask, db: Session) -> bool:
+        """Resolve the hardlink preference for this task's format.
+
+        A format-specific setting (``use_hardlinks_ebook`` / ``use_hardlinks_audiobook``)
+        wins; otherwise the global ``use_hardlinks`` applies. Default: on.
+        """
+        format_setting = db.query(AppSettings).filter(
+            AppSettings.key == f"use_hardlinks_{task.format}"
+        ).first()
+        if format_setting is not None:
+            return format_setting.value != "false"
+        global_setting = db.query(AppSettings).filter(
+            AppSettings.key == "use_hardlinks"
+        ).first()
+        return not (global_setting and global_setting.value == "false")
+
+    def _import_audiobook(
+        self,
+        task: DownloadTask,
+        source: Path,
+        dest_base: str,
+        db: Session,
+        use_hardlinks: bool,
+    ) -> Optional[str]:
+        """Lay an audiobook download out Audiobookshelf-style under ``dest_base``:
+
+            {dest_base}/{Book Title}/{Author} - {Book Title}{ (NN)}{ext}
+
+        Only audio files are carried over; a single-file book gets no ``(NN)``
+        suffix, multi-file books are numbered in filename order, zero-padded.
+        Returns the book folder path on success, ``None`` on failure.
+        """
+        book = db.query(Book).filter(Book.id == task.book_id).first()
+        if not book:
+            task.import_status = 'failed'
+            task.import_message = 'Book not found for this download task'
+            db.commit()
+            return None
+
+        # Gather audio tracks from the release (recursively for a folder).
+        if source.is_file():
+            tracks = [source] if source.suffix.lower() in AUDIO_EXTENSIONS else []
+        else:
+            tracks = sorted(
+                (p for p in source.rglob("*")
+                 if p.is_file() and p.suffix.lower() in AUDIO_EXTENSIONS),
+                key=lambda p: str(p).lower(),
+            )
+
+        if not tracks:
+            logger.error(
+                "orchestrator_audiobook_no_audio",
+                task_id=task.id,
+                source=str(source),
+            )
+            task.import_status = 'failed'
+            task.import_message = f'No audio files found in download: {source.name}'
+            db.commit()
+            return None
+
+        title = _sanitize_path_component(book.title)
+        author = _sanitize_path_component(book.author)
+        book_dir = Path(dest_base) / title
+        book_dir.mkdir(parents=True, exist_ok=True)
+
+        multi = len(tracks) > 1
+        width = max(2, len(str(len(tracks))))
+
+        imported = 0
+        for idx, src_file in enumerate(tracks, start=1):
+            suffix = f" ({idx:0{width}d})" if multi else ""
+            dest_file = book_dir / f"{author} - {title}{suffix}{src_file.suffix.lower()}"
+
+            if dest_file.exists():
+                logger.info(
+                    "orchestrator_audiobook_track_exists",
+                    task_id=task.id,
+                    dest=str(dest_file),
+                )
+                imported += 1
+                continue
+
+            try:
+                if use_hardlinks:
+                    try:
+                        os.link(str(src_file), str(dest_file))
+                    except (OSError, PermissionError) as e:
+                        logger.info(
+                            "orchestrator_audiobook_hardlink_failed_copying",
+                            task_id=task.id,
+                            error=str(e),
+                        )
+                        shutil.copy2(str(src_file), str(dest_file))
+                else:
+                    shutil.copy2(str(src_file), str(dest_file))
+                imported += 1
+            except Exception as e:
+                logger.error(
+                    "orchestrator_audiobook_track_error",
+                    task_id=task.id,
+                    src=str(src_file),
+                    error=str(e),
+                )
+
+        if imported == 0:
+            task.import_status = 'failed'
+            task.import_message = 'Failed to import any audio files'
+            db.commit()
+            return None
+
+        logger.info(
+            "orchestrator_audiobook_imported",
+            task_id=task.id,
+            book_dir=str(book_dir),
+            tracks=imported,
+        )
+        self._set_import_result(
+            task, db,
+            message=f'Imported {imported} audio file(s) to: {book_dir.name}',
+        )
+        return str(book_dir)
 
     def _set_import_result(self, task: DownloadTask, db: Session, message: str) -> None:
         """Record the outcome of a successful copy.

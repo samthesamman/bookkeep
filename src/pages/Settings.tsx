@@ -1731,7 +1731,7 @@ export default function Settings() {
               </div>
               <div className="space-y-2">
                 <Label htmlFor="audiobook-path" className="text-foreground">
-                  Audiobook Download Path
+                  Audiobook Media Path
                 </Label>
                 <DirectoryPicker
                   id="audiobook-path"
@@ -1740,7 +1740,9 @@ export default function Settings() {
                   onChange={setAudiobookDownloadPath}
                 />
                 <p className="text-xs text-muted-foreground">
-                  The directory where audiobooks will be downloaded
+                  Audiobooks are imported here as{' '}
+                  <code>{'{Book Title}/{Author} - {Book Title} (01).mp3'}</code> — point this
+                  at your Audiobookshelf library folder
                 </p>
               </div>
               <div className="flex items-center justify-between rounded-lg border border-border p-4">

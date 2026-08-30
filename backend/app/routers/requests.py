@@ -1006,3 +1006,107 @@ async def check_processing_requests_status(
     """Manually trigger status check for processing requests (admin only)"""
     background_tasks.add_task(update_processing_requests_status, db)
     return {"message": "Status check initiated"}
+
+
+@router.post("/{request_id}/create-hardlink", status_code=status.HTTP_200_OK)
+async def create_request_hardlink(
+    request_id: int,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(require_admin),
+):
+    """Admin: (re)create the Audiobook Media Path hardlink for a finished audiobook download.
+
+    Locates the completed ``DownloadTask`` for the request's book and re-runs the
+    Audiobookshelf-style import. Idempotent — audio files already present at the
+    destination are left untouched. On success the book is marked available and
+    the request is advanced to ``available`` (which also lets the availability
+    email go out).
+    """
+    import os
+    from sqlalchemy.orm import joinedload
+
+    db_request = (
+        db.query(models.BookRequest)
+        .options(joinedload(models.BookRequest.book))
+        .filter(models.BookRequest.id == request_id)
+        .first()
+    )
+    if not db_request:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Request not found")
+
+    if db_request.format != "audiobook":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Hardlinks can only be created for audiobook requests",
+        )
+    if not db_request.book:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Request has no associated book",
+        )
+
+    task = (
+        db.query(models.DownloadTask)
+        .filter(
+            models.DownloadTask.book_id == db_request.book_id,
+            models.DownloadTask.format == "audiobook",
+            models.DownloadTask.state.in_(["complete", "seeding"]),
+        )
+        .order_by(models.DownloadTask.id.desc())
+        .first()
+    )
+    if not task:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No completed audiobook download found for this request",
+        )
+
+    source_path = task.download_path
+    if not source_path or not os.path.exists(source_path):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Downloaded files are no longer on disk — cannot create the hardlink",
+        )
+
+    orchestrator = DownloadOrchestrator(db_session=db)
+    try:
+        dest_path = orchestrator._copy_to_destination(task, source_path, db)
+    except Exception as e:  # pragma: no cover - defensive
+        logger.error("request_create_hardlink_error", request_id=request_id, error=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Import failed: {str(e)}",
+        )
+
+    if not dest_path:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=task.import_message or "Import failed — check the Audiobook Media Path setting",
+        )
+
+    task.download_path = dest_path
+    db_request.book.audiobook_available = True
+    if db_request.status != "available":
+        db_request.status = "available"
+        db_request.updated_at = datetime.now(timezone.utc)
+    db.commit()
+
+    logger.info(
+        "request_create_hardlink_done",
+        request_id=request_id,
+        task_id=task.id,
+        dest_path=dest_path,
+    )
+
+    if db_request.book.hardcover_id:
+        await delete_cached(
+            make_cache_key("requests_by_hardcover", hardcover_id=db_request.book.hardcover_id)
+        )
+        await clear_cache_pattern("requests_by_hardcover_batch:*")
+
+    return {
+        "success": True,
+        "path": dest_path,
+        "status": db_request.status,
+        "message": f"Hardlink ready: {os.path.basename(dest_path)}",
+    }

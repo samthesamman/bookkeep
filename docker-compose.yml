@@ -29,6 +29,7 @@ services:
       - cifs-cloud-books:/downloads/ebooks
       - cifs-cloud-audiobooks:/downloads/audiobooks
       - cifs-cloud-calibre-dbs:/calibre
+      - cifs-cloud-data:/cloud-data
     ports:
       # Bind to loopback only. Put a TLS reverse proxy (Caddy/Traefik/nginx) in
       # front of this; do not expose 8000 directly to the LAN or internet.
@@ -99,3 +100,8 @@ volumes:
       type: "cifs"
       o: "username=${SMB_RO_USER},password=${SMB_RO_PASSWORD},nobrl,uid=1031,gid=65538,vers=3.0"
       device: //10.102.1.11/data/media/books/
+  cifs-cloud-data:
+    driver_opts:
+      type: "cifs"
+      o: "username=${SMB_USER},password=${SMB_PASSWORD},uid=1031,gid=65538,vers=3.0"
+      device: //10.102.1.11/data/

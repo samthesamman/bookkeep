@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Clock, CheckCircle, XCircle, Loader2, Trash2, User, CheckCircle2, Library, Inbox } from 'lucide-react';
+import { Clock, CheckCircle, XCircle, Loader2, Trash2, User, CheckCircle2, Library, Inbox, Link2 } from 'lucide-react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -82,6 +82,24 @@ function RequestRow({ request, index }: { request: BookRequest; index: number })
       });
     },
   });
+
+  const createHardlinkMutation = useMutation({
+    mutationFn: () => requestsApi.createHardlink(Number(request.id)),
+    onSuccess: (res) => {
+      queryClient.invalidateQueries({ queryKey: ['requests'] });
+      toast.success(res?.message || 'Hardlink created');
+    },
+    onError: (error: Error) => {
+      toast.error('Failed to create hardlink', {
+        description: error.message,
+      });
+    },
+  });
+
+  const canAddHardlink =
+    isAdmin &&
+    request.format === 'audiobook' &&
+    (request.status === 'processing' || request.status === 'not_found');
 
   const handleBookClick = () => {
     const bookIdentifier = request.book.hardcoverId || request.book.hardcoverSlug;
@@ -209,6 +227,23 @@ function RequestRow({ request, index }: { request: BookRequest; index: number })
               >
                 <CheckCircle2 className="h-4 w-4 mr-2" />
                 Mark Available
+              </Button>
+            )}
+
+            {canAddHardlink && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => createHardlinkMutation.mutate()}
+                disabled={createHardlinkMutation.isPending}
+                className="w-full h-9 rounded-lg border-primary/30 text-primary hover:bg-primary/10 hover:border-primary/50"
+              >
+                {createHardlinkMutation.isPending ? (
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                ) : (
+                  <Link2 className="h-4 w-4 mr-2" />
+                )}
+                Add Hardlink
               </Button>
             )}
 

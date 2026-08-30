@@ -437,6 +437,13 @@ export const requestsApi = {
       method: 'DELETE',
     }),
 
+  // Admin: (re)create the Audiobook Media Path hardlink for a finished audiobook download.
+  createHardlink: (id: number) =>
+    apiRequest<{ success: boolean; path: string; status: string; message: string }>(
+      `/api/requests/${id}/create-hardlink`,
+      { method: 'POST' }
+    ),
+
   getByBook: (bookId: number) =>
     apiRequest<{ ebook: string | null; audiobook: string | null }>(`/api/requests/by-book/${bookId}`),
 
