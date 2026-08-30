@@ -92,6 +92,7 @@ class BookBase(BaseModel):
     genres: Optional[List[str]] = None
     ebook_available: Optional[bool] = False
     audiobook_available: Optional[bool] = False
+    metadata_locked: Optional[bool] = False
 
 class BookCreate(BookBase):
     pass

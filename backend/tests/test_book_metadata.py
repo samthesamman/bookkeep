@@ -108,15 +108,17 @@ def test_apply_source_writes_one_source_and_respects_fields():
     assert b2.genres == "Sci-Fi"
 
 
-def test_apply_source_title_only_when_requested():
-    data = {"title": "Correct Title", "description": "blurb"}
-    b = Book(title="Wrong Title", author="A")
-    bm.apply_source(b, "googlebooks", data)  # default fields = all
-    assert b.title == "Correct Title"
+def test_apply_source_title_and_author_follow_fields():
+    data = {"title": "Correct Title", "author": "Real Author", "description": "blurb"}
 
-    b2 = Book(title="Wrong Title", author="A")
+    b = Book(title="Wrong Title", author="Wrong Author")
+    bm.apply_source(b, "googlebooks", data)  # default fields = all of APPLYABLE_FIELDS
+    assert b.title == "Correct Title" and b.author == "Real Author"
+    assert "title" in bm.APPLYABLE_FIELDS and "author" in bm.APPLYABLE_FIELDS
+
+    b2 = Book(title="Wrong Title", author="Wrong Author")
     bm.apply_source(b2, "googlebooks", data, fields=["description"])
-    assert b2.title == "Wrong Title"  # title not in fields
+    assert b2.title == "Wrong Title" and b2.author == "Wrong Author"
 
 
 @pytest.mark.asyncio

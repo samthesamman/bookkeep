@@ -438,6 +438,7 @@ async def set_book_link(
             from datetime import datetime, timezone
 
             book.last_refreshed = datetime.now(timezone.utc)
+        book.metadata_locked = True  # curated: keep Hardcover fetches from stomping it
         db.commit()
     except Exception as exc:  # linking still succeeded
         db.rollback()
@@ -509,6 +510,10 @@ async def clear_book_link(
     db: Session = Depends(get_db),
     _: models.User = Depends(require_admin),
 ):
+    link = calibre_link_service.get_links_for_calibre_ids(db, [book_id]).get(book_id)
+    if link is not None and link.book is not None:
+        # Reverting to Calibre's own metadata — let Hardcover own the row again.
+        link.book.metadata_locked = False
     removed = calibre_link_service.delete_link_for_calibre_id(db, book_id)
     return {"removed": removed}
 
@@ -531,6 +536,7 @@ async def refresh_book_metadata(
     try:
         await enrich_book(db, book, overwrite=True, resolve_hardcover=True, use_google=True)
         book.last_refreshed = datetime.now(timezone.utc)
+        book.metadata_locked = True
         db.commit()
     except Exception as exc:
         db.rollback()
@@ -553,6 +559,9 @@ class MetadataCandidate(BaseModel):
     found: bool = True
     note: Optional[str] = None  # why there is nothing to show (no match / error)
     title: Optional[str] = None
+    author: Optional[str] = None
+    publisher: Optional[str] = None
+    isbn: Optional[str] = None
     description: Optional[str] = None
     cover_url: Optional[str] = None
     page_count: Optional[int] = None
@@ -600,6 +609,9 @@ def _candidate(source: str, d: Optional[dict]) -> MetadataCandidate:
     return MetadataCandidate(
         source=source,
         title=d.get("title"),
+        author=d.get("author"),
+        publisher=d.get("publisher"),
+        isbn=d.get("isbn"),
         description=d.get("description"),
         cover_url=d.get("cover_url"),
         page_count=d.get("page_count"),
@@ -617,6 +629,8 @@ def _current_candidate(book: models.Book) -> MetadataCandidate:
         "current",
         {
             "title": book.title,
+            "author": book.author,
+            "isbn": book.isbn,
             "description": book.description,
             "cover_url": book.cover_url,
             "page_count": book.page_count,
@@ -738,16 +752,12 @@ async def apply_metadata(
         db.rollback()
         raise HTTPException(status_code=404, detail=f"No {body.source} match for this book")
 
-    if body.fields is not None:
-        fields = body.fields
-    else:
-        # Adopt the source's canonical title only when the admin searched with a
-        # corrected one; otherwise leave the stored title alone.
-        fields = [f for f in book_metadata.APPLYABLE_FIELDS if f != "title"]
-        if (body.title or "").strip():
-            fields.append("title")
+    # An explicit pick makes this source authoritative for the book, so adopt its
+    # title too (the auto-enrich path never renames — only this endpoint does).
+    fields = body.fields if body.fields is not None else list(book_metadata.APPLYABLE_FIELDS)
     book_metadata.apply_source(book, body.source, data, fields=fields, overwrite=True)
     book.last_refreshed = datetime.now(timezone.utc)
+    book.metadata_locked = True  # keep a later Hardcover fetch from stomping this
 
     if link is None:
         cal = calibre_service.get_book(_require_library(db), book_id)

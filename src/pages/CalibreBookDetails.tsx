@@ -66,7 +66,7 @@ export default function CalibreBookDetails() {
 
   const { data: coverUrl } = useCalibreCover(
     calibreId,
-    !!book?.has_cover && !book?.overlay_cover_url,
+    !!book?.has_cover && !book?.overlay_cover_url && !book?.metadata_locked,
   );
 
   const invalidate = () => {

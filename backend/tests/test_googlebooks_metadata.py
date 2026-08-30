@@ -16,13 +16,27 @@ def test_clean_html_flattens_to_plain_text():
     assert "\n\n" in out  # paragraph boundary preserved
 
 
-def test_cover_url_prefers_largest_and_https():
+def test_cover_url_prefers_largest_and_upsizes():
     links = {
-        "smallThumbnail": "http://x/s?edge=curl",
-        "thumbnail": "http://books.google.com/t?zoom=1&edge=curl&x=1",
-        "large": "http://books.google.com/l?zoom=2",
+        "smallThumbnail": "http://books.google.com/books/content?id=X&img=1&zoom=5&edge=curl",
+        "thumbnail": "http://books.google.com/books/content?id=X&img=1&zoom=1&edge=curl&source=gbs_api",
+        "large": "http://books.google.com/books/content?id=X&printsec=frontcover&img=1&zoom=3&edge=curl",
     }
-    assert gb._cover_url(links) == "http://books.google.com/l?zoom=2".replace("http://", "https://")
+    out = gb._cover_url(links)
+    assert out.startswith("https://")            # forced https
+    assert "large" not in links or "zoom=" not in out  # zoom param stripped
+    assert "edge=curl" not in out
+    assert out.endswith("&fife=w800")            # asks the image server for ~800px
+    assert out == (
+        "https://books.google.com/books/content?id=X&printsec=frontcover&img=1&fife=w800"
+    )
+
+
+def test_cover_url_falls_back_to_thumbnail_when_no_large():
+    out = gb._cover_url(
+        {"thumbnail": "http://books.google.com/books/content?id=Y&img=1&zoom=1&edge=curl"}
+    )
+    assert out == "https://books.google.com/books/content?id=Y&img=1&fife=w800"
 
 
 def test_categories_splits_and_drops_generic():
@@ -62,13 +76,21 @@ async def test_fetch_by_isbn_happy_path(monkeypatch):
             {
                 "volumeInfo": {
                     "title": "Dune",
+                    "authors": ["Frank Herbert"],
+                    "publisher": "Ace Books",
+                    "industryIdentifiers": [
+                        {"type": "ISBN_10", "identifier": "0441013597"},
+                        {"type": "ISBN_13", "identifier": "9780441013593"},
+                    ],
                     "description": "<p>A desert epic.</p>",
                     "pageCount": 604,
                     "publishedDate": "1965-08-01",
                     "averageRating": 4.5,
                     "ratingsCount": 1200,
                     "categories": ["Fiction / Science Fiction"],
-                    "imageLinks": {"thumbnail": "http://books.google.com/x?zoom=1&edge=curl"},
+                    "imageLinks": {
+                        "thumbnail": "http://books.google.com/books/content?id=x&img=1&zoom=1&edge=curl"
+                    },
                 }
             }
         ]
@@ -78,6 +100,9 @@ async def test_fetch_by_isbn_happy_path(monkeypatch):
         out = await gb.fetch(isbn="978-0-441-01359-3", title="Dune", author="Herbert")
 
     assert out["description"] == "A desert epic."
+    assert out["author"] == "Frank Herbert"
+    assert out["publisher"] == "Ace Books"
+    assert out["isbn"] == "9780441013593"  # ISBN_13 preferred
     assert out["page_count"] == 604
     assert out["published_date"] == "1965-08-01"
     assert out["rating"] == 4.5

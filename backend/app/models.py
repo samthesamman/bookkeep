@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, Text, ForeignKey, Float, BigInteger
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, Text, ForeignKey, Float, BigInteger, false
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.database import Base
@@ -60,6 +60,9 @@ class Book(Base):
     activities_count = Column(Integer, nullable=True)
     release_year = Column(Integer, nullable=True)
     is_seed_data = Column(Boolean, default=False)  # Mark seed data for refresh
+    # Admin has curated this book's metadata (source picker / Calibre refresh);
+    # a Hardcover detail re-fetch must not overwrite it. See _save_book_to_db.
+    metadata_locked = Column(Boolean, default=False, server_default=false(), nullable=False)
     # Per-format availability tracking
     ebook_available = Column(Boolean, default=False)  # Ebook is available in library
     audiobook_available = Column(Boolean, default=False)  # Audiobook is available in library

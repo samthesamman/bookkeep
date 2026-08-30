@@ -201,3 +201,21 @@ def test_overlay_book_dict_fills_and_prefers(db):
 
     out3 = cls.overlay_book_dict(base, None)
     assert out3["metadata_source"] == "calibre" and out3["linked_book_id"] is None
+
+
+def test_overlay_title_author_only_win_when_locked(db):
+    b = _book(db, title="Corrected Title", author="Real Author")
+    link = cls.upsert_link(db, calibre_book_id=20, book_id=b.id, source="manual", confirmed=True)
+    base = {"id": 20, "title": "Wrong Calibre Title", "authors": "Calibre Author"}
+
+    # Not locked → Calibre's file identity wins.
+    out = cls.overlay_book_dict(base, link)
+    assert out["title"] == "Wrong Calibre Title"
+    assert out["authors"] == "Calibre Author"
+
+    # Locked (curated via the source picker) → the Book row wins.
+    b.metadata_locked = True
+    db.commit()
+    out = cls.overlay_book_dict(base, link)
+    assert out["title"] == "Corrected Title"
+    assert out["authors"] == "Real Author"

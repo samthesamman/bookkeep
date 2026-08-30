@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Check, Loader2, RotateCcw, Search, Star } from 'lucide-react';
 import { toast } from 'sonner';
@@ -27,6 +27,27 @@ function stripHtml(s: string | null): string {
   return s.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
+const EMPTY = <span className="text-muted-foreground/50">—</span>;
+
+function Field({
+  label,
+  value,
+  mono,
+}: {
+  label: string;
+  value?: ReactNode;
+  mono?: boolean;
+}) {
+  return (
+    <div className="grid grid-cols-[70px_1fr] gap-2">
+      <dt className="text-muted-foreground">{label}</dt>
+      <dd className={mono ? 'break-all font-mono text-foreground' : 'text-foreground'}>
+        {value || EMPTY}
+      </dd>
+    </div>
+  );
+}
+
 function CandidateColumn({
   candidate,
   isCurrent,
@@ -43,7 +64,7 @@ function CandidateColumn({
   const desc = stripHtml(candidate.description);
   const unavailable = !isCurrent && candidate.found === false;
   return (
-    <div className="flex w-72 shrink-0 flex-col rounded-lg border border-border bg-card/50">
+    <div className="flex w-80 shrink-0 flex-col rounded-lg border border-border bg-card/50">
       <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2">
         <span className="text-sm font-semibold text-foreground">
           {SOURCE_LABEL[candidate.source]}
@@ -69,9 +90,8 @@ function CandidateColumn({
           {candidate.note || 'Nothing returned.'}
         </div>
       ) : (
-      <div className="flex-1 space-y-3 overflow-y-auto p-3" style={{ maxHeight: 420 }}>
-        <div className="flex gap-3">
-          <div className="h-32 w-20 shrink-0 overflow-hidden rounded border border-border bg-muted">
+        <div className="flex-1 space-y-3 overflow-y-auto p-3" style={{ maxHeight: 460 }}>
+          <div className="mx-auto h-36 w-24 shrink-0 overflow-hidden rounded border border-border bg-muted">
             {candidate.cover_url ? (
               <img
                 src={candidate.cover_url}
@@ -85,48 +105,70 @@ function CandidateColumn({
               </div>
             )}
           </div>
-          <div className="min-w-0 space-y-1 text-xs">
-            {candidate.title && (
-              <p className="font-medium leading-snug text-foreground">{candidate.title}</p>
-            )}
-            {candidate.rating ? (
-              <p className="inline-flex items-center gap-1 text-amber-500">
-                <Star className="h-3 w-3 fill-amber-400 text-amber-400" />
-                {formatRating(candidate.rating)}
-                {candidate.ratings_count ? (
-                  <span className="text-muted-foreground">({candidate.ratings_count})</span>
-                ) : null}
-              </p>
-            ) : null}
-            {candidate.published_date && (
-              <p className="text-muted-foreground">{candidate.published_date.slice(0, 10)}</p>
-            )}
-            {candidate.page_count ? (
-              <p className="text-muted-foreground">{candidate.page_count} pages</p>
-            ) : null}
-            {candidate.series && (
-              <p className="text-muted-foreground">
-                {candidate.series}
-                {candidate.series_position ? ` #${candidate.series_position}` : ''}
-              </p>
-            )}
+
+          <dl className="space-y-1.5 text-xs">
+            <Field label="Title" value={candidate.title} />
+            <Field label="Author" value={candidate.author} />
+            <Field label="Publisher" value={candidate.publisher} />
+            <Field label="ISBN" value={candidate.isbn} mono />
+            <Field
+              label="Published"
+              value={candidate.published_date ? candidate.published_date.slice(0, 10) : null}
+            />
+            <Field
+              label="Length"
+              value={candidate.page_count ? `${candidate.page_count} pages` : null}
+            />
+            <Field
+              label="Rating"
+              value={
+                candidate.rating ? (
+                  <span className="inline-flex items-center gap-1 text-amber-500">
+                    <Star className="h-3 w-3 fill-amber-400 text-amber-400" />
+                    {formatRating(candidate.rating)}
+                    {candidate.ratings_count ? (
+                      <span className="text-muted-foreground">({candidate.ratings_count})</span>
+                    ) : null}
+                  </span>
+                ) : null
+              }
+            />
+            <Field
+              label="Series"
+              value={
+                candidate.series
+                  ? `${candidate.series}${
+                      candidate.series_position ? ` #${candidate.series_position}` : ''
+                    }`
+                  : null
+              }
+            />
+            <Field
+              label="Subjects"
+              value={
+                candidate.genres.length > 0 ? (
+                  <span className="inline-flex flex-wrap gap-1">
+                    {candidate.genres.map((g) => (
+                      <span
+                        key={g}
+                        className="inline-flex items-center rounded-full bg-secondary px-2 py-0.5 text-[10px] font-semibold text-secondary-foreground"
+                      >
+                        {g}
+                      </span>
+                    ))}
+                  </span>
+                ) : null
+              }
+            />
+          </dl>
+
+          <div>
+            <p className="mb-1 text-xs text-muted-foreground">Description</p>
+            <p className="whitespace-pre-wrap text-xs leading-relaxed text-foreground">
+              {desc || <span className="italic text-muted-foreground/50">—</span>}
+            </p>
           </div>
         </div>
-
-        {candidate.genres.length > 0 && (
-          <div className="flex flex-wrap gap-1">
-            {candidate.genres.map((g) => (
-              <Badge key={g} variant="secondary" className="text-[10px]">
-                {g}
-              </Badge>
-            ))}
-          </div>
-        )}
-
-        <p className="whitespace-pre-wrap text-xs leading-relaxed text-muted-foreground">
-          {desc || <span className="italic">No description.</span>}
-        </p>
-      </div>
       )}
     </div>
   );
@@ -217,9 +259,11 @@ export function MetadataSourceDialog({
         <DialogHeader>
           <DialogTitle>Choose a metadata source</DialogTitle>
           <DialogDescription>
-            Live results from each source. Applying one overwrites the bookkeep
-            record's fields (series and ratings only come from Hardcover). Edit
-            the search title if the stored one is wrong.
+            What each source returns for this book. “Use this” overwrites the
+            stored record — title, author, description, cover, length, subjects
+            (series and rating only come from Hardcover; publisher and ISBN are
+            shown for comparison but not stored). Edit the search title first if
+            the stored one is wrong.
           </DialogDescription>
         </DialogHeader>
 
@@ -252,10 +296,7 @@ export function MetadataSourceDialog({
           )}
         </div>
         {overriding && (
-          <p className="text-xs text-muted-foreground">
-            Searching for “{searchTitle}”. Applying a source will also rename this
-            book to the source's title.
-          </p>
+          <p className="text-xs text-muted-foreground">Searching for “{searchTitle}”.</p>
         )}
 
         {isLoading ? (

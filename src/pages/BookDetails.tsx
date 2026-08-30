@@ -17,6 +17,7 @@ import { MetadataSourceDialog } from '@/components/books/MetadataSourceDialog';
 import { toast } from 'sonner';
 import { useUser } from '@/contexts/UserContext';
 import { usePageVisibility } from '@/hooks/usePageVisibility';
+import { useCalibreCover } from '@/hooks/useCalibreCover';
 
 export default function BookDetails() {
   const { id } = useParams();
@@ -76,6 +77,19 @@ export default function BookDetails() {
     calibre?.format_details.filter((f) => calibre.ebook_formats.includes(f.format)) ?? [];
   const calibreAudioFormats =
     calibre?.format_details.filter((f) => calibre.audiobook_formats.includes(f.format)) ?? [];
+
+  // For a linked book, the Calibre overlay (Calibre's own metadata merged with
+  // the curated Book row) is exactly what "My Books" shows — use it here too.
+  const { data: calBook } = useQuery({
+    queryKey: ['calibre-book', calibre?.calibre_book_id],
+    queryFn: () => calibreApi.getBook(calibre!.calibre_book_id),
+    enabled: !!calibre?.calibre_book_id,
+    staleTime: 30_000,
+  });
+  const { data: calFileCover } = useCalibreCover(
+    calibre?.calibre_book_id ?? 0,
+    !!calBook?.has_cover && !calBook?.overlay_cover_url && !calBook?.metadata_locked,
+  );
 
   const invalidateCalibre = () => {
     queryClient.invalidateQueries({ queryKey: ['calibre', 'by-hardcover', hardcoverId] });
@@ -254,20 +268,66 @@ export default function BookDetails() {
         : undefined;
   const hasAnyRequests = ebookRequested || audiobookRequested;
 
-  // Hardcover's record is sometimes sparse (no cover, no blurb). Fall back to
-  // the local Book row, which the merge job / source picker keeps filled.
-  const placeholderCover = !book.cover || book.cover === '/placeholder.svg';
-  const displayCover = (!placeholderCover ? book.cover : dbBook?.cover_url) || '/placeholder.svg';
-  const displayDescription =
-    book.description && book.description.trim() ? book.description : dbBook?.description || '';
+  // The "local" view: the Calibre overlay for a linked book (what My Books
+  // shows), else the local Book row. When it exists and either the book is in
+  // Calibre or an admin curated it (metadata_locked), it wins over Hardcover;
+  // otherwise Hardcover leads and local only fills gaps.
+  const curated = !!dbBook?.metadata_locked;
+  const preferLocal = !!calBook || curated;
+  const pick = <T,>(local: T | undefined, remote: T | undefined): T | undefined =>
+    preferLocal ? local ?? remote : remote ?? local;
+
+  const clean = <T,>(v: T | null | undefined): T | undefined =>
+    v == null || v === '' || (Array.isArray(v) && v.length === 0) ? undefined : v;
+
+  const hcCover = book.cover && book.cover !== '/placeholder.svg' ? book.cover : undefined;
+  const hcRating = book.rating && book.rating > 0 ? book.rating : undefined;
+  const hcPages = book.pageCount && book.pageCount > 0 ? book.pageCount : undefined;
   const overlayGenres: string[] = Array.isArray(dbBook?.genres)
     ? (dbBook!.genres as string[]).filter(Boolean)
     : [];
-  const displayGenres = book.genres && book.genres.length > 0 ? book.genres : overlayGenres;
-  const displayRating = book.rating && book.rating > 0 ? book.rating : dbBook?.rating || 0;
-  const displayPageCount =
-    book.pageCount && book.pageCount > 0 ? book.pageCount : dbBook?.page_count || 0;
-  const displayPublishedDate = book.publishedDate || dbBook?.published_date || '';
+
+  const stripTags = (s: string | null | undefined) =>
+    clean(s?.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim());
+
+  const local = calBook
+    ? {
+        title: clean(calBook.title),
+        author: clean(calBook.authors),
+        cover: clean(calBook.overlay_cover_url) ?? calFileCover,
+        description: stripTags(calBook.description),
+        genres: (calBook.genres ?? []).filter(Boolean),
+        rating: calBook.rating && calBook.rating > 0 ? calBook.rating : undefined,
+        pageCount: calBook.page_count && calBook.page_count > 0 ? calBook.page_count : undefined,
+        publishedDate: clean(calBook.pubdate),
+        series: clean(calBook.series),
+        seriesPosition: clean(calBook.series_index),
+      }
+    : {
+        title: clean(dbBook?.title),
+        author: clean(dbBook?.author),
+        cover: clean(dbBook?.cover_url),
+        description: clean(dbBook?.description),
+        genres: overlayGenres,
+        rating: dbBook?.rating && dbBook.rating > 0 ? dbBook.rating : undefined,
+        pageCount: dbBook?.page_count && dbBook.page_count > 0 ? dbBook.page_count : undefined,
+        publishedDate: clean(dbBook?.published_date),
+        series: clean(dbBook?.series),
+        seriesPosition: clean(dbBook?.series_position),
+      };
+
+  const displayTitle = pick(local.title, book.title) || book.title;
+  const displayAuthor = pick(local.author, book.author) || book.author;
+  const displayCover = pick(local.cover, hcCover) || '/placeholder.svg';
+  const displayDescription = pick(local.description, clean(book.description)) || '';
+  const displayGenres =
+    pick(clean(local.genres), clean(book.genres)) || [];
+  const displayRating = pick(local.rating, hcRating) || 0;
+  const displayPageCount = pick(local.pageCount, hcPages) || 0;
+  const displayPublishedDate = pick(local.publishedDate, clean(book.publishedDate)) || '';
+  const displaySeries = pick(local.series, clean(book.series));
+  const displaySeriesPosition = pick(local.seriesPosition, clean(book.seriesPosition));
+  const displaySeriesId = book.seriesId ?? dbBook?.series_id ?? undefined;
 
   return (
     <>
@@ -328,7 +388,7 @@ export default function BookDetails() {
                 <div className="book-cover w-52 md:w-64 aspect-[2/3]">
                   <img
                     src={displayCover}
-                    alt={book.title}
+                    alt={displayTitle}
                     className="h-full w-full object-cover"
                     onError={(e) => {
                       (e.target as HTMLImageElement).src = '/placeholder.svg';
@@ -341,26 +401,31 @@ export default function BookDetails() {
             {/* Info */}
             <div className="flex-1 space-y-5 text-center md:text-left">
               {/* Series link */}
-              {book.series && book.seriesId && (
-                <Link
-                  to={`/series/${book.seriesId}`}
-                  className="inline-flex items-center gap-2 text-primary text-sm font-medium hover:underline underline-offset-4"
-                >
-                  {book.series} {book.seriesPosition ? `#${book.seriesPosition}` : ''}
-                </Link>
-              )}
+              {displaySeries &&
+                (displaySeriesId ? (
+                  <Link
+                    to={`/series/${displaySeriesId}`}
+                    className="inline-flex items-center gap-2 text-primary text-sm font-medium hover:underline underline-offset-4"
+                  >
+                    {displaySeries} {displaySeriesPosition ? `#${displaySeriesPosition}` : ''}
+                  </Link>
+                ) : (
+                  <p className="text-sm font-medium text-muted-foreground">
+                    {displaySeries} {displaySeriesPosition ? `#${displaySeriesPosition}` : ''}
+                  </p>
+                ))}
 
               {/* Title */}
               <h1 className="text-3xl md:text-4xl lg:text-5xl font-bold text-foreground tracking-tight leading-tight">
-                {book.title}
+                {displayTitle}
               </h1>
 
               {/* Author */}
               <Link
-                to={`/author?name=${encodeURIComponent(book.author)}`}
+                to={`/author?name=${encodeURIComponent(displayAuthor)}`}
                 className="inline-block text-xl text-primary font-medium hover:underline underline-offset-4 transition-colors"
               >
-                {book.author}
+                {displayAuthor}
               </Link>
 
               {/* Meta info */}
@@ -708,7 +773,7 @@ export default function BookDetails() {
       )}
 
       <RequestDialog
-        book={book}
+        book={{ ...book, title: displayTitle, author: displayAuthor }}
         open={requestOpen}
         onOpenChange={setRequestOpen}
         preferredFormat={preferredFormat}
@@ -723,16 +788,16 @@ export default function BookDetails() {
           book={{
             id: dbBook?.id ?? requestStatus?.book_id ?? undefined,
             hardcoverId: hardcoverId,
-            title: book.title,
-            author: book.author,
+            title: displayTitle,
+            author: displayAuthor,
             isbn: book.isbn,
             description: displayDescription,
             cover: displayCover,
             publishedDate: displayPublishedDate,
             rating: displayRating,
             pageCount: displayPageCount,
-            series: book.series,
-            seriesPosition: book.seriesPosition,
+            series: displaySeries,
+            seriesPosition: displaySeriesPosition,
             genres: displayGenres,
           }}
           open={searchOpen}

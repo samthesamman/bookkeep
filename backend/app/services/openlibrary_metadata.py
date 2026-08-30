@@ -43,6 +43,8 @@ _SEARCH_FIELDS = ",".join(
         "key",
         "title",
         "author_name",
+        "publisher",
+        "isbn",
         "first_publish_year",
         "cover_i",
         "number_of_pages_median",
@@ -205,11 +207,17 @@ async def fetch(
     genres = _clean_subjects(work.get("subjects") or doc.get("subject") or [])
     cover_url = _COVER_URL.format(cover_id=doc["cover_i"]) if doc.get("cover_i") else None
     year = doc.get("first_publish_year")
+    authors = [a for a in (doc.get("author_name") or []) if a][:3]
+    isbns = [i for i in (doc.get("isbn") or []) if i]
+    isbn = next((i for i in isbns if len(i) == 13), isbns[0] if isbns else None)
 
     return {
         "source": "openlibrary",
         "work_key": work_key or None,
         "title": doc.get("title"),
+        "author": ", ".join(authors) or None,
+        "publisher": next((p for p in (doc.get("publisher") or []) if p), None),
+        "isbn": isbn,
         "description": _description_text(work),
         "cover_url": cover_url,
         "page_count": doc.get("number_of_pages_median"),

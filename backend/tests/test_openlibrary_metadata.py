@@ -76,6 +76,9 @@ async def test_fetch_by_isbn_happy_path():
                 {
                     "key": "/works/OL1W",
                     "title": "Dune",
+                    "author_name": ["Frank Herbert"],
+                    "publisher": ["Ace Books", "Chilton"],
+                    "isbn": ["0441013597", "9780441013593"],
                     "first_publish_year": 1965,
                     "cover_i": 99,
                     "number_of_pages_median": 604,
@@ -90,6 +93,9 @@ async def test_fetch_by_isbn_happy_path():
         out = await ol.fetch(isbn="978-0-441-01359-3", title="Dune", author="Herbert")
 
     assert out["description"] == "A desert epic."
+    assert out["author"] == "Frank Herbert"
+    assert out["publisher"] == "Ace Books"
+    assert out["isbn"] == "9780441013593"  # 13-digit preferred
     assert out["cover_url"].endswith("99-L.jpg")
     assert out["page_count"] == 604
     assert out["published_date"] == "1965"

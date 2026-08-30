@@ -356,10 +356,12 @@ export interface LocalBook {
   page_count: number | null;
   hardcover_id: number | null;
   series: string | null;
+  series_id: number | null;
   series_position: number | null;
   genres: string[] | null;
   ebook_available: boolean;
   audiobook_available: boolean;
+  metadata_locked: boolean;
 }
 
 // Books API endpoints
@@ -1333,6 +1335,7 @@ export interface CalibreSettings {
 /** Fields added by the local metadata overlay (calibre_book_links). */
 export interface CalibreOverlayFields {
   metadata_source?: 'calibre' | 'overlay';
+  metadata_locked?: boolean;
   linked_book_id?: number | null;
   link_source?: 'download' | 'manual' | 'fuzzy' | null;
   link_confirmed?: boolean;
@@ -1400,6 +1403,9 @@ export interface MetadataCandidate {
   found: boolean;
   note: string | null;
   title: string | null;
+  author: string | null;
+  publisher: string | null;
+  isbn: string | null;
   description: string | null;
   cover_url: string | null;
   page_count: number | null;

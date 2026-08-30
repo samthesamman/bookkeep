@@ -261,6 +261,11 @@ def _save_book_to_db(book_data: dict, db: Session) -> Optional[Book]:
     
     # If book exists, update it and return early
     if existing:
+        # An admin has curated this book's metadata — a routine Hardcover fetch
+        # must not stomp it. (Structured stats staleness is acceptable here.)
+        if getattr(existing, "metadata_locked", False):
+            return existing
+
         # Transform API data to database format
         if "default_physical_edition_id" in book_data and "default_edition_id" not in book_data:
             book_data["default_edition_id"] = book_data.get("default_physical_edition_id")
@@ -742,14 +747,9 @@ async def execute_graphql(query: str, variables: dict = None, db: Session = None
     )
 
 
-async def lookup_book_by_slug(slug: str, db: Session = None) -> Optional[dict]:
-    """
-    Look up a book on Hardcover by its slug and return full book data.
-    Returns None if not found.
-    """
-    query = """
-    query GetBookBySlug($slug: String!) {
-      books(where: {slug: {_eq: $slug}}, limit: 1) {
+# Shared book-object selection for the by-slug / by-id / by-title lookups that
+# feed the metadata source picker and book_metadata.enrich_book.
+_HC_LOOKUP_BOOK_FIELDS = """
         id
         title
         slug
@@ -768,27 +768,35 @@ async def lookup_book_by_slug(slug: str, db: Session = None) -> Optional[dict]:
         default_physical_edition_id
         book_series {
           position
-          series {
-            id
-            name
-          }
+          series { id name }
         }
         contributions {
-          author {
-            id
-            name
-            slug
-          }
+          author { id name slug }
         }
         taggings(limit: 10) {
-          tag {
-            tag
-          }
+          tag { tag }
         }
-      }
-    }
+        editions(order_by: {users_count: desc_nulls_last}, limit: 8) {
+          isbn_13
+          isbn_10
+          language { code3 }
+          publisher { name }
+        }
+"""
+
+
+async def lookup_book_by_slug(slug: str, db: Session = None) -> Optional[dict]:
     """
-    
+    Look up a book on Hardcover by its slug and return full book data.
+    Returns None if not found.
+    """
+    query = (
+        "query GetBookBySlug($slug: String!) {\n"
+        "  books(where: {slug: {_eq: $slug}}, limit: 1) {"
+        + _HC_LOOKUP_BOOK_FIELDS
+        + "  }\n}"
+    )
+
     try:
         result = await execute_graphql(query, {"slug": slug}, db)
         books = result.get("books", [])
@@ -809,47 +817,12 @@ async def lookup_book_by_id(book_id: int, db: Session = None) -> Optional[dict]:
 
     Same payload shape as :func:`lookup_book_by_slug`. Returns None if not found.
     """
-    query = """
-    query GetBookById($id: Int!) {
-      books(where: {id: {_eq: $id}}, limit: 1) {
-        id
-        title
-        slug
-        release_year
-        release_date
-        pages
-        description
-        cached_image
-        cached_contributors
-        rating
-        ratings_count
-        users_count
-        activities_count
-        default_ebook_edition_id
-        default_audio_edition_id
-        default_physical_edition_id
-        book_series {
-          position
-          series {
-            id
-            name
-          }
-        }
-        contributions {
-          author {
-            id
-            name
-            slug
-          }
-        }
-        taggings(limit: 10) {
-          tag {
-            tag
-          }
-        }
-      }
-    }
-    """
+    query = (
+        "query GetBookById($id: Int!) {\n"
+        "  books(where: {id: {_eq: $id}}, limit: 1) {"
+        + _HC_LOOKUP_BOOK_FIELDS
+        + "  }\n}"
+    )
 
     try:
         result = await execute_graphql(query, {"id": int(book_id)}, db)
@@ -898,47 +871,12 @@ async def lookup_book_by_title_author(title: str, author: str = None, db: Sessio
                           matched_title=doc.get("title"))
                 
                 # Fetch full book details using the ID
-                full_query = """
-                query GetBook($id: Int!) {
-                  books_by_pk(id: $id) {
-                    id
-                    title
-                    slug
-                    release_year
-                    release_date
-                    pages
-                    description
-                    cached_image
-                    cached_contributors
-                    rating
-                    ratings_count
-                    users_count
-                    activities_count
-                    default_ebook_edition_id
-                    default_audio_edition_id
-                    default_physical_edition_id
-                    book_series {
-                      position
-                      series {
-                        id
-                        name
-                      }
-                    }
-                    contributions {
-                      author {
-                        id
-                        name
-                        slug
-                      }
-                    }
-                    taggings(limit: 10) {
-                      tag {
-                        tag
-                      }
-                    }
-                  }
-                }
-                """
+                full_query = (
+                    "query GetBook($id: Int!) {\n"
+                    "  books_by_pk(id: $id) {"
+                    + _HC_LOOKUP_BOOK_FIELDS
+                    + "  }\n}"
+                )
                 full_result = await execute_graphql(full_query, {"id": int(book_id)}, db)
                 return full_result.get("books_by_pk")
         

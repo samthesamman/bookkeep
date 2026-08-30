@@ -44,6 +44,37 @@ def _genres(hc: dict) -> list[str]:
     ]
 
 
+def _author(hc: dict) -> Optional[str]:
+    names = []
+    for c in hc.get("contributions") or []:
+        name = (c.get("author") or {}).get("name")
+        if name and name not in names:
+            names.append(name)
+    if not names and hc.get("cached_contributors"):
+        for c in hc["cached_contributors"]:
+            name = c.get("author", {}).get("name") if isinstance(c.get("author"), dict) else c.get("name")
+            if name and name not in names:
+                names.append(name)
+    return ", ".join(names[:3]) or None
+
+
+def _publisher_and_isbn(hc: dict) -> tuple[Optional[str], Optional[str]]:
+    editions = hc.get("editions") or []
+    # Prefer English editions; fall back to whatever is most-read.
+    english = [e for e in editions if (e.get("language") or {}).get("code3") == "eng"]
+    ordered = english + [e for e in editions if e not in english]
+
+    publisher = next(
+        ((e.get("publisher") or {}).get("name") for e in ordered if (e.get("publisher") or {}).get("name")),
+        None,
+    )
+    isbn = next(
+        (e.get("isbn_13") or e.get("isbn_10") for e in ordered if e.get("isbn_13") or e.get("isbn_10")),
+        None,
+    )
+    return publisher, isbn
+
+
 def normalize(hc: Optional[dict]) -> dict:
     """Return a source dict (see book_metadata) from a raw Hardcover ``books`` payload."""
     if not hc:
@@ -52,9 +83,13 @@ def normalize(hc: Optional[dict]) -> dict:
     published = hc.get("release_date") or (
         str(hc["release_year"]) if hc.get("release_year") else None
     )
+    publisher, isbn = _publisher_and_isbn(hc)
     return {
         "source": "hardcover",
         "title": hc.get("title"),
+        "author": _author(hc),
+        "publisher": publisher,
+        "isbn": isbn,
         "description": hc.get("description"),
         "cover_url": _cover_url(hc),
         "page_count": hc.get("pages"),

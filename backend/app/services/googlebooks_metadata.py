@@ -73,11 +73,21 @@ def _clean_html(raw: Optional[str]) -> Optional[str]:
 
 
 def _cover_url(image_links: dict) -> Optional[str]:
+    """Best cover URL from Google's imageLinks, upsized.
+
+    ``imageLinks`` almost always only has ``thumbnail`` / ``smallThumbnail``,
+    which the content server renders at ~128 px because of the ``zoom=1`` /
+    ``zoom=5`` in the URL. Dropping the zoom (and the page-curl effect) and
+    asking for a fixed width via ``fife`` gets a ~800 px cover instead.
+    """
     for key in _IMAGE_KEYS:
         url = image_links.get(key)
-        if url:
-            url = url.replace("http://", "https://").replace("&edge=curl", "")
-            return url
+        if not url:
+            continue
+        url = url.replace("http://", "https://")
+        url = re.sub(r"&(?:edge=curl|zoom=\d+)", "", url)
+        sep = "&" if "?" in url else "?"
+        return f"{url}{sep}fife=w800"
     return None
 
 
@@ -173,9 +183,19 @@ async def fetch(
     rating = round(float(rating), 2) if isinstance(rating, (int, float)) else None
     pages = info.get("pageCount")
 
+    idents = info.get("industryIdentifiers") or []
+    isbn = next(
+        (i.get("identifier") for i in idents if i.get("type") == "ISBN_13"),
+        next((i.get("identifier") for i in idents if i.get("type") == "ISBN_10"), None),
+    )
+    authors = [a for a in (info.get("authors") or []) if a]
+
     return {
         "source": "googlebooks",
         "title": info.get("title"),
+        "author": ", ".join(authors) or None,
+        "publisher": info.get("publisher"),
+        "isbn": isbn,
         "description": _clean_html(info.get("description")),
         "cover_url": _cover_url(info.get("imageLinks") or {}),
         "page_count": pages if isinstance(pages, int) and pages > 0 else None,

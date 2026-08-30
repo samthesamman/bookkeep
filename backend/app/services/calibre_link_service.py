@@ -149,12 +149,24 @@ def overlay_book_dict(
     out["hardcover_id"] = book.hardcover_id
     out["metadata_source"] = "overlay"
 
-    out["rating"] = _pick(book.rating, out.get("rating"), prefer_local)
-    out["series"] = _pick(book.series, out.get("series"), prefer_local)
-    out["series_index"] = _pick(
-        book.series_position, out.get("series_index"), prefer_local
-    )
-    out["pubdate"] = _pick(book.published_date, out.get("pubdate"), prefer_local)
+    # A locked row (an admin picked a metadata source for it) is authoritative
+    # for every descriptive field — Calibre keeps only the files. Otherwise the
+    # Book row just fills gaps in Calibre's own metadata.
+    locked = bool(getattr(book, "metadata_locked", False))
+    out["metadata_locked"] = locked
+    authoritative = prefer_local or locked
+
+    def field(local, calibre_val):
+        if authoritative:
+            return local
+        return _pick(local, calibre_val, False)
+
+    out["title"] = field(book.title, out.get("title")) or out.get("title")
+    out["authors"] = field(book.author, out.get("authors")) or out.get("authors")
+    out["rating"] = field(book.rating, out.get("rating"))
+    out["series"] = field(book.series, out.get("series"))
+    out["series_index"] = field(book.series_position, out.get("series_index"))
+    out["pubdate"] = field(book.published_date, out.get("pubdate"))
     out["page_count"] = book.page_count
     out["overlay_cover_url"] = book.cover_url
     out["genres"] = (
@@ -162,7 +174,7 @@ def overlay_book_dict(
     )
 
     if "description" in out:
-        out["description"] = _pick(book.description, out.get("description"), prefer_local)
+        out["description"] = field(book.description, out.get("description"))
 
     return out
 

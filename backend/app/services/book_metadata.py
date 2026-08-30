@@ -229,6 +229,7 @@ async def enrich_book(
 _SOURCE_KEY = {"googlebooks": "gb", "openlibrary": "ol", "hardcover": "hc"}
 APPLYABLE_FIELDS = (
     "title",
+    "author",
     "description",
     "cover_url",
     "page_count",
@@ -290,10 +291,14 @@ def apply_source(
     filtered = {k: v for k, v in data.items() if k in wanted}
     changed = _merge(book, {key: filtered}, overwrite=overwrite)
 
-    # Title is identity, not a merge-table field — adopt the source's when asked.
+    # Title/author are identity, not merge-table fields — adopt when asked.
     new_title = data.get("title")
     if "title" in wanted and new_title and book.title != new_title:
         book.title = new_title
+        changed = True
+    new_author = data.get("author")
+    if "author" in wanted and new_author and book.author != new_author:
+        book.author = new_author
         changed = True
 
     if key == "hc" and data.get("hardcover_id") and not getattr(book, "hardcover_id", None):
