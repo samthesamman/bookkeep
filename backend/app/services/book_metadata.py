@@ -24,7 +24,6 @@ field with the highest-priority source's value.
 """
 from __future__ import annotations
 
-import re
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -33,6 +32,7 @@ import structlog
 from app.services import googlebooks_metadata as gb
 from app.services import openlibrary_metadata as ol
 from app.services.hardcover_metadata import normalize as hc_normalize
+from app.services.text_match import titles_match
 
 logger = structlog.get_logger()
 
@@ -48,22 +48,6 @@ _FIELD_PRIORITY = {
 }
 _GENRE_PRIORITY = ("hc", "gb", "ol")
 _RATING_PRIORITY = ("hc", "gb")
-
-
-def _tokens(text: str) -> set[str]:
-    return {w for w in re.sub(r"[^a-z0-9 ]", " ", (text or "").lower()).split() if len(w) > 1}
-
-
-def _title_match(a: str, b: str) -> bool:
-    ta, tb = _tokens(a), _tokens(b)
-    if not ta or not tb:
-        return False
-    if ta == tb:
-        return True
-    smaller, larger = (ta, tb) if len(ta) <= len(tb) else (tb, ta)
-    if len(smaller) >= 2 and smaller <= larger:
-        return True
-    return len(ta & tb) / len(ta | tb) >= 0.6
 
 
 async def _hardcover_payload(
@@ -94,7 +78,7 @@ async def _hardcover_payload(
     found = await lookup_book_by_title_author(want_title, want_author, db)
     if not found or not found.get("id"):
         return None
-    if not _title_match(want_title, found.get("title") or ""):
+    if not titles_match(want_title, found.get("title") or ""):
         logger.info(
             "book_metadata_hardcover_title_mismatch",
             book_id=getattr(book, "id", None),

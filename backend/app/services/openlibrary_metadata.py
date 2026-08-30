@@ -20,6 +20,8 @@ from typing import Any, Optional
 import httpx
 import structlog
 
+from app.services.text_match import titles_match
+
 logger = structlog.get_logger()
 
 _SEARCH_URL = "https://openlibrary.org/search.json"
@@ -66,29 +68,6 @@ _SUBJECT_NOISE = (
     "new york times bestseller",
 )
 _MAX_GENRES = 8
-
-
-def _tokens(text: str) -> set[str]:
-    return {w for w in re.sub(r"[^a-z0-9 ]", " ", (text or "").lower()).split() if len(w) > 1}
-
-
-def _title_match(a: str, b: str) -> bool:
-    """True when two titles plausibly name the same book.
-
-    Exact token-set equality always matches; otherwise the shorter side must be
-    fully contained in the longer with at least two shared tokens (a subtitle on
-    one side only), or the two must have a strong overlap. Single-word titles
-    match only exactly, so "Dune" never matches "Dune Messiah".
-    """
-    ta, tb = _tokens(a), _tokens(b)
-    if not ta or not tb:
-        return False
-    if ta == tb:
-        return True
-    smaller, larger = (ta, tb) if len(ta) <= len(tb) else (tb, ta)
-    if len(smaller) >= 2 and smaller <= larger:
-        return True
-    return len(ta & tb) / len(ta | tb) >= 0.6
 
 
 def _clean_subjects(subjects: list[str]) -> list[str]:
@@ -183,13 +162,21 @@ async def fetch(
                     doc = docs[0]
 
         if doc is None and title:
-            params = {"title": title, "fields": _SEARCH_FIELDS, "limit": 5}
-            if author:
-                params["author"] = author
-            data = await _get_json(client, _SEARCH_URL, params)
-            for cand in (data or {}).get("docs") or []:
-                if _title_match(title, cand.get("title") or ""):
-                    doc = cand
+            main = title.split(":", 1)[0].strip()
+            search_titles = [title]
+            if main and main.lower() != title.strip().lower():
+                search_titles.append(main)
+
+            for search_title in search_titles:
+                params = {"title": search_title, "fields": _SEARCH_FIELDS, "limit": 8}
+                if author:
+                    params["author"] = author
+                data = await _get_json(client, _SEARCH_URL, params)
+                for cand in (data or {}).get("docs") or []:
+                    if titles_match(title, cand.get("title") or ""):
+                        doc = cand
+                        break
+                if doc is not None:
                     break
 
         if doc is None:

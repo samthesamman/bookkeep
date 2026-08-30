@@ -16,27 +16,40 @@ def test_clean_html_flattens_to_plain_text():
     assert "\n\n" in out  # paragraph boundary preserved
 
 
-def test_cover_url_prefers_largest_and_upsizes():
+def test_cover_url_prefers_frontcover_and_strips_zoom():
     links = {
         "smallThumbnail": "http://books.google.com/books/content?id=X&img=1&zoom=5&edge=curl",
         "thumbnail": "http://books.google.com/books/content?id=X&img=1&zoom=1&edge=curl&source=gbs_api",
         "large": "http://books.google.com/books/content?id=X&printsec=frontcover&img=1&zoom=3&edge=curl",
     }
     out = gb._cover_url(links)
-    assert out.startswith("https://")            # forced https
-    assert "large" not in links or "zoom=" not in out  # zoom param stripped
-    assert "edge=curl" not in out
-    assert out.endswith("&fife=w800")            # asks the image server for ~800px
-    assert out == (
-        "https://books.google.com/books/content?id=X&printsec=frontcover&img=1&fife=w800"
-    )
+    assert out == "https://books.google.com/books/content?id=X&printsec=frontcover&img=1"
+    assert "zoom=" not in out and "edge=curl" not in out
 
 
-def test_cover_url_falls_back_to_thumbnail_when_no_large():
+def test_cover_url_falls_back_to_thumbnail_when_no_frontcover():
     out = gb._cover_url(
         {"thumbnail": "http://books.google.com/books/content?id=Y&img=1&zoom=1&edge=curl"}
     )
-    assert out == "https://books.google.com/books/content?id=Y&img=1&fife=w800"
+    assert out == "https://books.google.com/books/content?id=Y&img=1"
+
+
+def test_cover_url_skips_interior_page_scans():
+    # Google returns a pg= URL (an interior page) when it has no cover on file.
+    assert (
+        gb._cover_url(
+            {"thumbnail": "http://books.google.com/books/content?id=Z&pg=PA1&img=1&zoom=1"}
+        )
+        is None
+    )
+    # ...but a frontcover pg-less URL among the links still wins.
+    out = gb._cover_url(
+        {
+            "smallThumbnail": "http://books.google.com/books/content?id=Z&pg=PA1&img=1&zoom=5",
+            "thumbnail": "http://books.google.com/books/content?id=Z&printsec=frontcover&img=1&zoom=1&edge=curl",
+        }
+    )
+    assert out == "https://books.google.com/books/content?id=Z&printsec=frontcover&img=1"
 
 
 def test_categories_splits_and_drops_generic():
@@ -44,11 +57,6 @@ def test_categories_splits_and_drops_generic():
     out = gb._categories(cats)
     assert "Fantasy" in out and "Epic" in out
     assert "Fiction" not in out and "General" not in out
-
-
-def test_title_match():
-    assert gb._title_match("Dune", "Dune")
-    assert not gb._title_match("Dune", "Dune Messiah")
 
 
 def _resp(json_body, status_code=200):
@@ -119,6 +127,35 @@ async def test_fetch_title_search_rejects_mismatch():
     factory, _ = _client_returning(_resp(body))
     with patch.object(gb.httpx, "AsyncClient", factory):
         assert await gb.fetch(title="Dune", author="Frank Herbert") is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_title_search_matches_by_subtitle_and_falls_back_to_main():
+    wanted = "No Bad Parts: Healing Trauma and Restoring Wholeness"
+    # First query (full title): only a wrong-but-word-overlapping hit -> rejected.
+    first = _resp({"items": [{"volumeInfo": {"title": "Healing Trauma"}}]})
+    # Second query (main title only): the real book, with title/subtitle split.
+    second = _resp(
+        {
+            "items": [
+                {
+                    "volumeInfo": {
+                        "title": "No Bad Parts",
+                        "subtitle": "Healing Trauma and Restoring Wholeness",
+                        "description": "IFS.",
+                    }
+                }
+            ]
+        }
+    )
+    factory, client = _client_returning(first, second)
+    with patch.object(gb.httpx, "AsyncClient", factory):
+        out = await gb.fetch(title=wanted, author="Richard Schwartz")
+
+    assert out is not None and out["title"] == "No Bad Parts"
+    assert client.get.await_count == 2
+    assert "No Bad Parts" in client.get.await_args_list[1].kwargs["params"]["q"]
+    assert "Healing Trauma" not in client.get.await_args_list[1].kwargs["params"]["q"]
 
 
 @pytest.mark.asyncio

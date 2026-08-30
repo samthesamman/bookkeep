@@ -9,13 +9,6 @@ from app.services import openlibrary_metadata as ol
 # --------------------------------------------------------------------------- #
 # Pure helpers
 # --------------------------------------------------------------------------- #
-def test_title_match():
-    assert ol._title_match("The Final Empire", "Mistborn: The Final Empire")
-    assert ol._title_match("Dune", "Dune")
-    assert not ol._title_match("Dune", "Dune Messiah")
-    assert not ol._title_match("The Hobbit", "A Wizard of Earthsea")
-
-
 def test_clean_subjects_filters_noise_and_caps():
     raw = [
         "Fantasy fiction",

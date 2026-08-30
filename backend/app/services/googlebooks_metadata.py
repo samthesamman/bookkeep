@@ -24,6 +24,8 @@ from typing import Any, Optional
 import httpx
 import structlog
 
+from app.services.text_match import titles_match
+
 logger = structlog.get_logger()
 
 _API_URL = "https://www.googleapis.com/books/v1/volumes"
@@ -43,22 +45,6 @@ def get_api_key() -> str:
     return os.getenv("GOOGLE_BOOKS_API_KEY", "").strip()
 
 
-def _tokens(text: str) -> set[str]:
-    return {w for w in re.sub(r"[^a-z0-9 ]", " ", (text or "").lower()).split() if len(w) > 1}
-
-
-def _title_match(a: str, b: str) -> bool:
-    ta, tb = _tokens(a), _tokens(b)
-    if not ta or not tb:
-        return False
-    if ta == tb:
-        return True
-    smaller, larger = (ta, tb) if len(ta) <= len(tb) else (tb, ta)
-    if len(smaller) >= 2 and smaller <= larger:
-        return True
-    return len(ta & tb) / len(ta | tb) >= 0.6
-
-
 def _clean_html(raw: Optional[str]) -> Optional[str]:
     """Google Books descriptions are HTML — flatten to readable plain text."""
     if not raw:
@@ -73,22 +59,29 @@ def _clean_html(raw: Optional[str]) -> Optional[str]:
 
 
 def _cover_url(image_links: dict) -> Optional[str]:
-    """Best cover URL from Google's imageLinks, upsized.
+    """Best front-cover URL from Google's imageLinks, upsized.
 
-    ``imageLinks`` almost always only has ``thumbnail`` / ``smallThumbnail``,
-    which the content server renders at ~128 px because of the ``zoom=1`` /
-    ``zoom=5`` in the URL. Dropping the zoom (and the page-curl effect) and
-    asking for a fixed width via ``fife`` gets a ~800 px cover instead.
+    Two problems Google's imageLinks have: (1) they're usually only ``thumbnail``
+    / ``smallThumbnail``, rendered at ~128 px because of ``zoom=1`` / ``zoom=5``;
+    (2) when Google has no cover on file it hands back a ``pg=...`` URL that
+    renders an interior page (a wall of text). So: take the largest link whose
+    URL says ``printsec=frontcover`` (or at least isn't a ``pg=`` page), drop the
+    zoom + page-curl, and ask for a fixed width via ``fife``.
     """
-    for key in _IMAGE_KEYS:
-        url = image_links.get(key)
-        if not url:
-            continue
-        url = url.replace("http://", "https://")
-        url = re.sub(r"&(?:edge=curl|zoom=\d+)", "", url)
-        sep = "&" if "?" in url else "?"
-        return f"{url}{sep}fife=w800"
-    return None
+    urls = [image_links.get(k) for k in _IMAGE_KEYS]
+    urls = [u for u in urls if u]
+
+    best = next((u for u in urls if "printsec=frontcover" in u), None)
+    if best is None:
+        best = next((u for u in urls if "pg=" not in u), None)
+    if best is None:
+        return None
+
+    # Drop the tiny fixed zoom (~128px) and the page-curl; Google then renders
+    # the cover at its native ~600-800px. Adding &fife=... can flip it to a
+    # full-page render, so leave zoom off entirely.
+    url = best.replace("http://", "https://")
+    return re.sub(r"&(?:edge=curl|zoom=\d+)", "", url)
 
 
 def _categories(cats: list[str]) -> list[str]:
@@ -135,6 +128,12 @@ async def _get(client: httpx.AsyncClient, params: dict) -> Optional[dict]:
     raise GoogleBooksError("Google Books did not respond after retries")
 
 
+def _volume_title(vi: dict) -> str:
+    t = (vi.get("title") or "").strip()
+    sub = (vi.get("subtitle") or "").strip()
+    return f"{t}: {sub}" if t and sub else t
+
+
 async def fetch(
     *,
     isbn: Optional[str] = None,
@@ -143,13 +142,15 @@ async def fetch(
 ) -> Optional[dict]:
     """Return normalized Google Books metadata for a book, or ``None``.
 
-    Resolves by ISBN first (exact), then by a title/author query whose top hit
-    must plausibly match ``title``.
+    Resolves by ISBN first (exact), then by a plain title/author keyword query
+    (``intitle:"…"`` is brittle for long "Main Title: subtitle" strings) whose
+    top hits are filtered to one that actually matches ``title``. Falls back to
+    the main title alone if the full string finds nothing.
     """
     if not isbn and not title:
         return None
 
-    params: dict[str, Any] = {"maxResults": 5}
+    params: dict[str, Any] = {}
     key = get_api_key()
     if key:
         params["key"] = key
@@ -166,14 +167,19 @@ async def fetch(
                     info = items[0].get("volumeInfo") or {}
 
         if info is None and title:
-            q = f'intitle:"{title}"'
-            if author:
-                q += f' inauthor:"{author}"'
-            data = await _get(client, {**params, "q": q})
-            for item in (data or {}).get("items") or []:
-                vi = item.get("volumeInfo") or {}
-                if _title_match(title, vi.get("title") or ""):
-                    info = vi
+            main = title.split(":", 1)[0].strip()
+            queries = [f"{title} {author}".strip() if author else title]
+            if main and main.lower() != title.strip().lower():
+                queries.append(f"{main} {author}".strip() if author else main)
+
+            for q in queries:
+                data = await _get(client, {**params, "q": q, "maxResults": 10})
+                for item in (data or {}).get("items") or []:
+                    vi = item.get("volumeInfo") or {}
+                    if titles_match(title, _volume_title(vi)):
+                        info = vi
+                        break
+                if info is not None:
                     break
 
     if not info:
