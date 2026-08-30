@@ -18,6 +18,7 @@ import { formatRating } from '@/lib/utils';
 const SOURCE_LABEL: Record<MetadataSource, string> = {
   current: 'Current',
   googlebooks: 'Google Books',
+  applebooks: 'Apple Books',
   openlibrary: 'Open Library',
   hardcover: 'Hardcover',
 };

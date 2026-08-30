@@ -593,7 +593,7 @@ class ApplyMetadataResponse(BaseModel):
     current: MetadataCandidate
 
 
-_METADATA_SOURCES = ("googlebooks", "openlibrary", "hardcover")
+_METADATA_SOURCES = ("googlebooks", "applebooks", "openlibrary", "hardcover")
 
 
 def _as_genre_list(value) -> list[str]:

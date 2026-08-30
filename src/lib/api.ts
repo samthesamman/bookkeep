@@ -1396,7 +1396,12 @@ export interface CalibreBooksResponse {
   page_size: number;
 }
 
-export type MetadataSource = 'current' | 'googlebooks' | 'openlibrary' | 'hardcover';
+export type MetadataSource =
+  | 'current'
+  | 'googlebooks'
+  | 'applebooks'
+  | 'openlibrary'
+  | 'hardcover';
 
 export interface MetadataCandidate {
   source: MetadataSource;

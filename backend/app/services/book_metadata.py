@@ -3,12 +3,12 @@
 No single free source is best at everything, so each field is taken from the
 source that does it well, in priority order:
 
-    description      Google Books -> Hardcover -> Open Library
-    cover_url        Hardcover -> Google Books -> Open Library
+    cover_url        Apple Books -> Hardcover -> Google Books -> Open Library
+    description      Google Books -> Hardcover -> Open Library -> Apple Books
     page_count       Hardcover -> Google Books -> Open Library
-    published_date   Hardcover -> Google Books -> Open Library
-    rating / count   Hardcover -> Google Books          (taken as a pair)
-    genres           Hardcover -> Google Books -> Open Library
+    published_date   Hardcover -> Google Books -> Open Library -> Apple Books
+    rating / count   Hardcover -> Google Books -> Apple Books   (taken as a pair)
+    genres           Hardcover -> Google Books -> Open Library -> Apple Books
     series / *_id / *_position   Hardcover only
 
 Which sources are queried depends on the call:
@@ -16,8 +16,9 @@ Which sources are queried depends on the call:
 * ``use_google=False`` (the every-minute and daily Calibre sweeps): Open Library
   (free, unlimited) plus Hardcover only for already-linked books. Keeps
   Hardcover's rate limit and Google Books' daily quota untouched.
-* ``use_google=True`` (after a download, and the admin refresh / link actions):
-  all three, so the downloaded book gets Google Books' description.
+* ``use_google=True`` (after a download, and the admin refresh / link / source
+  picker actions): Google Books and Apple Books too — for the best description
+  and the highest-resolution cover.
 
 ``overwrite=False`` fills only empty fields; ``overwrite=True`` replaces a
 field with the highest-priority source's value.
@@ -29,6 +30,7 @@ from typing import Optional
 
 import structlog
 
+from app.services import applebooks_metadata as ab
 from app.services import googlebooks_metadata as gb
 from app.services import openlibrary_metadata as ol
 from app.services.hardcover_metadata import normalize as hc_normalize
@@ -38,16 +40,16 @@ logger = structlog.get_logger()
 
 # Per-field source priority. Keys are the source dict keys used below.
 _FIELD_PRIORITY = {
-    "description": ("gb", "hc", "ol"),
-    "cover_url": ("hc", "gb", "ol"),
+    "description": ("gb", "hc", "ol", "ab"),
+    "cover_url": ("ab", "hc", "gb", "ol"),
     "page_count": ("hc", "gb", "ol"),
-    "published_date": ("hc", "gb", "ol"),
+    "published_date": ("hc", "gb", "ol", "ab"),
     "series": ("hc",),
     "series_id": ("hc",),
     "series_position": ("hc",),
 }
-_GENRE_PRIORITY = ("hc", "gb", "ol")
-_RATING_PRIORITY = ("hc", "gb")
+_GENRE_PRIORITY = ("hc", "gb", "ol", "ab")
+_RATING_PRIORITY = ("hc", "gb", "ab")
 
 
 async def _hardcover_payload(
@@ -155,20 +157,23 @@ async def enrich_book(
     sources: dict[str, dict] = {}
 
     if use_google:
-        try:
-            sources["gb"] = await gb.fetch(isbn=isbn, title=book.title, author=book.author) or {}
-        except Exception as exc:  # best effort
-            logger.warning(
-                "book_metadata_googlebooks_failed",
-                book_id=getattr(book, "id", None),
-                error=str(exc),
-            )
+        for name, mod in (("gb", gb), ("ab", ab)):
+            try:
+                sources[name] = (
+                    await mod.fetch(isbn=isbn, title=book.title, author=book.author) or {}
+                )
+            except Exception as exc:  # best effort
+                logger.warning(
+                    f"book_metadata_{name}_failed",
+                    book_id=getattr(book, "id", None),
+                    error=str(exc),
+                )
 
     def _have(field: str) -> bool:
-        return any((sources.get(k) or {}).get(field) for k in ("gb", "ol"))
+        return any((sources.get(k) or {}).get(field) for k in ("gb", "ab", "ol"))
 
-    # Open Library is the free fallback: skip it only when Google Books already
-    # covered the fields it would contribute.
+    # Open Library is the free fallback: skip it only when Google / Apple Books
+    # already covered the fields it would contribute.
     if not (_have("description") and _have("cover_url") and _have("genres")):
         try:
             sources["ol"] = (
@@ -185,7 +190,7 @@ async def enrich_book(
     want_hardcover = (
         bool(linked)
         or resolve_hardcover
-        or not (sources.get("gb") or sources.get("ol"))
+        or not any(sources.get(k) for k in ("gb", "ab", "ol"))
     )
     if want_hardcover:
         try:
@@ -210,7 +215,7 @@ async def enrich_book(
     return changed
 
 
-_SOURCE_KEY = {"googlebooks": "gb", "openlibrary": "ol", "hardcover": "hc"}
+_SOURCE_KEY = {"googlebooks": "gb", "openlibrary": "ol", "hardcover": "hc", "applebooks": "ab"}
 APPLYABLE_FIELDS = (
     "title",
     "author",
@@ -232,10 +237,10 @@ async def fetch_source(
 ) -> Optional[dict]:
     """Fetch one named source's normalized metadata for ``book`` (or ``None``).
 
-    ``source`` is ``"googlebooks"`` | ``"openlibrary"`` | ``"hardcover"``. A
-    ``title`` (and optional ``author``) override searches for that instead of the
-    stored value — and skips the ISBN / stored-id shortcut, since those point at
-    the book whose title is being corrected.
+    ``source`` is ``"googlebooks"`` | ``"openlibrary"`` | ``"hardcover"`` |
+    ``"applebooks"``. A ``title`` (and optional ``author``) override searches for
+    that instead of the stored value — and skips the ISBN / stored-id shortcut,
+    since those point at the book whose title is being corrected.
     """
     override = bool(title and title.strip())
     q_title = title.strip() if override else book.title
@@ -246,6 +251,8 @@ async def fetch_source(
         return await gb.fetch(isbn=q_isbn, title=q_title, author=q_author)
     if source == "openlibrary":
         return await ol.fetch(isbn=q_isbn, title=q_title, author=q_author)
+    if source == "applebooks":
+        return await ab.fetch(isbn=q_isbn, title=q_title, author=q_author)
     if source == "hardcover":
         payload = await _hardcover_payload(
             db,

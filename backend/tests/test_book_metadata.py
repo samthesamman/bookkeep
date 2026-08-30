@@ -12,6 +12,13 @@ from app.models import Book
 from app.services import book_metadata as bm
 
 
+@pytest.fixture(autouse=True)
+def _no_network(monkeypatch):
+    # enrich_book calls Apple + Google Books when use_google=True; stub Apple by
+    # default so tests that only mock gb/ol/hc don't hit the network.
+    monkeypatch.setattr(bm.ab, "fetch", AsyncMock(return_value=None))
+
+
 # --------------------------------------------------------------------------- #
 # _merge — per-field source priority
 # --------------------------------------------------------------------------- #
@@ -37,10 +44,18 @@ def test_merge_description_prefers_google_then_hardcover_then_openlibrary():
     assert b2.description == "HC blurb"
 
 
-def test_merge_cover_prefers_hardcover():
+def test_merge_cover_prefers_apple_then_hardcover():
     b = Book(title="Dune", author="Frank Herbert")
-    bm._merge(b, _sources(gb={"cover_url": "gb.jpg"}, hc={"cover_url": "hc.jpg"}), overwrite=False)
-    assert b.cover_url == "hc.jpg"
+    bm._merge(
+        b,
+        _sources(ab={"cover_url": "apple.jpg"}, hc={"cover_url": "hc.jpg"}, gb={"cover_url": "gb.jpg"}),
+        overwrite=False,
+    )
+    assert b.cover_url == "apple.jpg"
+
+    b2 = Book(title="Dune", author="Frank Herbert")
+    bm._merge(b2, _sources(gb={"cover_url": "gb.jpg"}, hc={"cover_url": "hc.jpg"}), overwrite=False)
+    assert b2.cover_url == "hc.jpg"  # no Apple -> Hardcover next
 
 
 def test_merge_rating_and_count_taken_as_pair_from_hardcover():
