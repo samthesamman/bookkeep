@@ -230,6 +230,7 @@ export default function MyBooks() {
                       book.hardcover_id
                         ? `/book/${book.hardcover_id}`
                         : `/my-books/${book.id}`,
+                      { state: { from: '/my-books', fromLabel: 'Back to My Books' } },
                     )
                   }
                 />

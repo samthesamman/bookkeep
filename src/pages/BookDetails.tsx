@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useParams, Link, useSearchParams } from 'react-router-dom';
+import { useParams, Link, useSearchParams, useNavigate, useLocation } from 'react-router-dom';
 import { ArrowLeft, Star, Calendar, BookOpen, Tag, Clock, Users, Headphones, Library, ExternalLink, Trash2, Search, X, Download, Globe } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
@@ -20,6 +20,8 @@ import { usePageVisibility } from '@/hooks/usePageVisibility';
 export default function BookDetails() {
   const { id } = useParams();
   const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
+  const location = useLocation();
   const [requestOpen, setRequestOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchFormat, setSearchFormat] = useState<'ebook' | 'audiobook'>('ebook');
@@ -252,13 +254,39 @@ export default function BookDetails() {
     <>
       <div className="space-y-10 animate-fade-in-up">
         {/* Back Button */}
-        <Link
-          to="/"
-          className="inline-flex items-center gap-2 text-muted-foreground hover:text-primary transition-colors duration-300 group"
-        >
-          <ArrowLeft className="h-4 w-4 transition-transform duration-300 group-hover:-translate-x-1" />
-          <span className="font-medium">Back to Discover</span>
-        </Link>
+        {(() => {
+          const backState = location.state as { from?: string; fromLabel?: string } | null;
+          const backClassName =
+            'inline-flex items-center gap-2 text-muted-foreground hover:text-primary transition-colors duration-300 group';
+          const backIcon = (
+            <ArrowLeft className="h-4 w-4 transition-transform duration-300 group-hover:-translate-x-1" />
+          );
+
+          if (backState?.from) {
+            return (
+              <Link to={backState.from} className={backClassName}>
+                {backIcon}
+                <span className="font-medium">{backState.fromLabel ?? 'Back'}</span>
+              </Link>
+            );
+          }
+
+          if (location.key !== 'default') {
+            return (
+              <button type="button" onClick={() => navigate(-1)} className={backClassName}>
+                {backIcon}
+                <span className="font-medium">Back</span>
+              </button>
+            );
+          }
+
+          return (
+            <Link to="/" className={backClassName}>
+              {backIcon}
+              <span className="font-medium">Back to Discover</span>
+            </Link>
+          );
+        })()}
 
         {/* Hero Section */}
         <div className="relative rounded-3xl overflow-hidden">
