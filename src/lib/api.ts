@@ -439,7 +439,7 @@ export const requestsApi = {
 
   // Admin: (re)create the Audiobook Media Path hardlink for a finished audiobook download.
   createHardlink: (id: number) =>
-    apiRequest<{ success: boolean; path: string; status: string; message: string }>(
+    apiRequest<{ success: boolean; path: string; status: string; audiobookshelf_scan_requested: boolean; message: string }>(
       `/api/requests/${id}/create-hardlink`,
       { method: 'POST' }
     ),

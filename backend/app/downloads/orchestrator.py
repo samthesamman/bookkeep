@@ -166,6 +166,14 @@ class DownloadOrchestrator:
             total_before_filter = len(releases)
 
             if available_protocols:
+                for r in releases:
+                    if r.protocol not in available_protocols:
+                        logger.info(
+                            "orchestrator_drop_protocol",
+                            title=r.title,
+                            protocol=r.protocol,
+                            available_protocols=available_protocols,
+                        )
                 releases = [r for r in releases if r.protocol in available_protocols]
 
             filtered_count = total_before_filter - len(releases)

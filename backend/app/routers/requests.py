@@ -1011,6 +1011,7 @@ async def check_processing_requests_status(
 @router.post("/{request_id}/create-hardlink", status_code=status.HTTP_200_OK)
 async def create_request_hardlink(
     request_id: int,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(database.get_db),
     current_user: models.User = Depends(require_admin),
 ):
@@ -1104,9 +1105,47 @@ async def create_request_hardlink(
         )
         await clear_cache_pattern("requests_by_hardcover_batch:*")
 
+    # Ask Audiobookshelf to rescan so the new files show up there, then (in the
+    # background) pick up whatever the scan ingested, quick-match each item's
+    # metadata, and link this book. Runs even if the scan trigger 403s — it also
+    # covers the folder watcher / a manual scan.
+    abs_configured = False
+    scan_requested = False
+    try:
+        from app.routers.audiobookshelf import (
+            get_default_audiobookshelf_server,
+            get_audiobookshelf_max_added_at,
+            trigger_audiobookshelf_scan,
+            link_and_match_new_audiobook,
+        )
+
+        abs_server = get_default_audiobookshelf_server(db)
+        if abs_server:
+            abs_configured = True
+            baseline_ms = await get_audiobookshelf_max_added_at(abs_server)
+            if not baseline_ms:
+                baseline_ms = int((datetime.now(timezone.utc).timestamp() - 120) * 1000)
+            scan_requested = await trigger_audiobookshelf_scan(abs_server)
+            background_tasks.add_task(
+                link_and_match_new_audiobook,
+                abs_server.id, db_request.book_id, baseline_ms,
+            )
+    except Exception as e:  # best effort — the hardlink already succeeded
+        logger.warning(
+            "request_create_hardlink_abs_scan_failed", request_id=request_id, error=str(e)
+        )
+
+    if scan_requested:
+        abs_note = " — Audiobookshelf scan started; metadata match will follow"
+    elif abs_configured:
+        abs_note = " — trigger an Audiobookshelf scan; matching will follow automatically"
+    else:
+        abs_note = ""
+
     return {
         "success": True,
         "path": dest_path,
         "status": db_request.status,
-        "message": f"Hardlink ready: {os.path.basename(dest_path)}",
+        "audiobookshelf_scan_requested": scan_requested,
+        "message": f"Hardlink ready: {os.path.basename(dest_path)}{abs_note}",
     }

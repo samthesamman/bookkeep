@@ -4,6 +4,7 @@ from fastapi.responses import Response
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 from typing import Optional, Dict, Any, List
+import asyncio
 import httpx
 import structlog
 
@@ -57,6 +58,247 @@ async def get_audiobookshelf_libraries(server: models.AudiobookshelfServer) -> L
     except httpx.RequestError as e:
         logger.error("audiobookshelf_libraries_error", error=str(e))
         return []
+
+
+async def _book_library_ids(server: models.AudiobookshelfServer) -> List[str]:
+    """The library ids to act on: server.library_id if pinned, else all book libraries."""
+    if server.library_id:
+        return [server.library_id]
+    return [lib["id"] for lib in await get_audiobookshelf_libraries(server) if lib.get("id")]
+
+
+async def trigger_audiobookshelf_scan(server: models.AudiobookshelfServer) -> bool:
+    """Ask Audiobookshelf to rescan its book libraries for newly added files.
+
+    Scans ``server.library_id`` when set, otherwise every non-podcast library.
+    Best effort — the Audiobookshelf API key must belong to an admin/root user
+    (``POST /api/libraries/:id/scan`` returns 403 otherwise). Returns True if at
+    least one library scan was accepted.
+    """
+    library_ids = await _book_library_ids(server)
+    if not library_ids:
+        logger.warning("audiobookshelf_scan_no_libraries", server=server.name)
+        return False
+
+    triggered = 0
+    async with httpx.AsyncClient(timeout=20.0, follow_redirects=True, verify=False) as client:
+        for lib_id in library_ids:
+            url = f"{server.url.rstrip('/')}/api/libraries/{lib_id}/scan"
+            try:
+                response = await client.post(url, headers=_auth_headers(server))
+            except httpx.RequestError as e:
+                logger.warning("audiobookshelf_scan_error", library_id=lib_id, url=url, error=str(e))
+                continue
+            if response.status_code in (200, 202):
+                triggered += 1
+                logger.info("audiobookshelf_scan_started", library_id=lib_id, status_code=response.status_code)
+            else:
+                logger.warning(
+                    "audiobookshelf_scan_failed",
+                    library_id=lib_id,
+                    url=url,
+                    status_code=response.status_code,
+                    response=response.text[:200],
+                    hint="API key must be an admin/root user",
+                )
+
+    return triggered > 0
+
+
+async def get_audiobookshelf_max_added_at(server: models.AudiobookshelfServer) -> int:
+    """Current newest ``addedAt`` (ms epoch) across the book libraries.
+
+    Captured *before* a scan as a baseline so the follow-up can tell which items
+    the scan actually brought in — using Audiobookshelf's own clock, so host
+    clock skew doesn't matter.
+    """
+    newest = 0
+    try:
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True, verify=False) as client:
+            for lib_id in await _book_library_ids(server):
+                url = f"{server.url.rstrip('/')}/api/libraries/{lib_id}/items"
+                response = await client.get(
+                    url,
+                    headers=_auth_headers(server),
+                    params={"sort": "addedAt", "desc": "1", "minified": "1", "limit": 1},
+                )
+                if response.status_code == 200:
+                    results = response.json().get("results", [])
+                    if results:
+                        newest = max(newest, results[0].get("addedAt") or 0)
+    except (httpx.RequestError, ValueError) as e:
+        logger.warning("audiobookshelf_baseline_error", error=str(e))
+    return newest
+
+
+async def get_recently_added_audiobookshelf_items(
+    server: models.AudiobookshelfServer,
+    since_ms: int,
+    *,
+    per_library_limit: int = 50,
+) -> List[Dict[str, Any]]:
+    """Library items with ``addedAt`` strictly greater than ``since_ms``, newest first."""
+    recent: List[Dict[str, Any]] = []
+    try:
+        async with httpx.AsyncClient(timeout=20.0, follow_redirects=True, verify=False) as client:
+            for lib_id in await _book_library_ids(server):
+                url = f"{server.url.rstrip('/')}/api/libraries/{lib_id}/items"
+                response = await client.get(
+                    url,
+                    headers=_auth_headers(server),
+                    params={
+                        "sort": "addedAt",
+                        "desc": "1",
+                        "minified": "1",
+                        "limit": per_library_limit,
+                    },
+                )
+                if response.status_code != 200:
+                    logger.warning(
+                        "audiobookshelf_recent_items_failed",
+                        library_id=lib_id, status_code=response.status_code,
+                    )
+                    continue
+                for item in response.json().get("results", []):
+                    if (item.get("addedAt") or 0) > since_ms:
+                        recent.append(item)
+                    else:
+                        break  # sorted desc — everything after is older
+    except (httpx.RequestError, ValueError) as e:
+        logger.warning("audiobookshelf_recent_items_error", error=str(e))
+    return recent
+
+
+async def match_audiobookshelf_item(
+    server: models.AudiobookshelfServer,
+    item_id: str,
+    *,
+    title: Optional[str] = None,
+    author: Optional[str] = None,
+    isbn: Optional[str] = None,
+    provider: Optional[str] = None,
+    override_details: bool = False,
+) -> bool:
+    """Trigger a metadata quick-match for one Audiobookshelf library item.
+
+    Audiobookshelf re-queries its configured metadata provider and updates the
+    item's details/cover. ``provider`` defaults to the library's own setting.
+    Returns True when Audiobookshelf reports the item was updated.
+    """
+    url = f"{server.url.rstrip('/')}/api/items/{item_id}/match"
+    payload: Dict[str, Any] = {"overrideDetails": override_details}
+    if provider:
+        payload["provider"] = provider
+    if title:
+        payload["title"] = title
+    if author:
+        payload["author"] = author
+    if isbn:
+        payload["isbn"] = isbn
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True, verify=False) as client:
+            response = await client.post(url, headers=_auth_headers(server), json=payload)
+        if response.status_code in (200, 202):
+            body = response.json() if response.content else {}
+            if isinstance(body, dict) and body.get("warning"):
+                logger.info("audiobookshelf_match_no_result", item_id=item_id, warning=body["warning"])
+                return False
+            logger.info("audiobookshelf_match_ok", item_id=item_id)
+            return True
+        logger.warning(
+            "audiobookshelf_match_failed",
+            item_id=item_id,
+            status_code=response.status_code,
+            response=response.text[:200],
+        )
+    except (httpx.RequestError, ValueError) as e:
+        logger.warning("audiobookshelf_match_error", item_id=item_id, error=str(e))
+    return False
+
+
+async def link_and_match_new_audiobook(
+    server_id: int,
+    book_id: int,
+    baseline_added_at_ms: int,
+    *,
+    attempts: int = 18,
+    delay_seconds: float = 10.0,
+) -> None:
+    """Background job: after a scan, pick up every item Audiobookshelf newly
+    ingested (``addedAt`` past ``baseline_added_at_ms``), quick-match each so
+    Audiobookshelf refreshes its own metadata, and link the one that is this
+    request's book to ``Book.audiobookshelf_id``.
+
+    Polls the ``addedAt``-sorted library list (cheap, capped) rather than a full
+    fetch. Keeps working if the scan was triggered by the folder watcher or a
+    manual scan. Gives up quietly after ``attempts`` — ``sync_from_audiobookshelf``
+    is the backstop.
+    """
+    from app.database import SessionLocal
+
+    db = SessionLocal()
+    try:
+        server = db.query(models.AudiobookshelfServer).filter(
+            models.AudiobookshelfServer.id == server_id
+        ).first()
+        book = db.query(models.Book).filter(models.Book.id == book_id).first()
+        if not server or not book:
+            return
+
+        processed: set = set()
+        linked = bool(book.audiobookshelf_id)
+
+        for attempt in range(1, attempts + 1):
+            await asyncio.sleep(delay_seconds)
+            try:
+                recent = await get_recently_added_audiobookshelf_items(server, baseline_added_at_ms)
+            except Exception as e:  # pragma: no cover - network
+                logger.warning("audiobookshelf_recent_poll_error", book_id=book_id, error=str(e))
+                continue
+
+            fresh = [it for it in recent if it.get("id") and it["id"] not in processed]
+            for item in fresh:
+                item_id = item["id"]
+                processed.add(item_id)
+                meta = (item.get("media") or {}).get("metadata") or {}
+                is_this_book = match_book_to_abs_item(book, item)
+
+                if is_this_book and not linked:
+                    book.audiobookshelf_id = item_id
+                    book.audiobook_available = True
+                    db.commit()
+                    linked = True
+                    logger.info(
+                        "audiobookshelf_new_item_linked",
+                        book_id=book_id, item_id=item_id, attempt=attempt,
+                    )
+
+                await match_audiobookshelf_item(
+                    server, item_id,
+                    title=meta.get("title") or (book.title if is_this_book else None),
+                    author=meta.get("authorName") or (book.author if is_this_book else None),
+                    isbn=book.isbn if is_this_book else None,
+                )
+                await asyncio.sleep(1.0)
+
+            # Our book is in and this poll surfaced nothing new → the scan has
+            # settled, we're done.
+            if linked and not fresh:
+                logger.info(
+                    "audiobookshelf_recent_match_complete",
+                    book_id=book_id, items_matched=len(processed),
+                )
+                return
+
+        logger.info(
+            "audiobookshelf_recent_match_timeout",
+            book_id=book_id, items_matched=len(processed), linked=linked,
+        )
+    except Exception as e:  # pragma: no cover - defensive
+        logger.error("audiobookshelf_link_and_match_error", book_id=book_id, error=str(e))
+    finally:
+        db.close()
 
 
 async def get_audiobookshelf_library_items(

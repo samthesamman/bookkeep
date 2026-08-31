@@ -120,6 +120,27 @@ class ProwlarrSource(ReleaseSource):
                 limit=100
             )
 
+            # TEMP DEBUG: dump every raw result Prowlarr returned for this query
+            logger.info(
+                "prowlarr_raw_results",
+                query=query,
+                count=len(results),
+            )
+            for i, result in enumerate(results):
+                logger.info(
+                    "prowlarr_raw_result",
+                    idx=i,
+                    title=result.get("title"),
+                    protocol=result.get("protocol"),
+                    seeders=result.get("seeders"),
+                    size=result.get("size"),
+                    indexer=result.get("indexer"),
+                    categories=[c.get("id") for c in result.get("categories", []) if isinstance(c, dict)],
+                    has_download_url=bool(result.get("downloadUrl")),
+                    download_url=result.get("downloadUrl"),
+                    guid=result.get("guid"),
+                )
+
             if results:
                 # Add only unique results (by download URL)
                 for result in results:
@@ -127,6 +148,11 @@ class ProwlarrSource(ReleaseSource):
                     if url and url not in seen_urls:
                         seen_urls.add(url)
                         all_results.append(result)
+                    elif not url:
+                        logger.info(
+                            "prowlarr_drop_no_download_url",
+                            title=result.get("title"),
+                        )
 
                 # Stop if we have enough results
                 if len(all_results) >= 50:
@@ -190,19 +216,20 @@ class ProwlarrSource(ReleaseSource):
 
         # Validate author if provided - helps ensure results match the intended book
         if expected_author and not self._author_matches(title, expected_author):
-            logger.debug(
-                "prowlarr_author_mismatch",
-                release_title=title[:100],
+            logger.info(
+                "prowlarr_drop_author_mismatch",
+                release_title=title,
                 expected_author=expected_author
             )
             return None
 
         # Validate title if provided - prevents grabbing wrong books by same author
         if expected_title and not self._title_matches(title, expected_title):
-            logger.debug(
-                "prowlarr_title_mismatch",
-                release_title=title[:100],
-                expected_title=expected_title
+            logger.info(
+                "prowlarr_drop_title_mismatch",
+                release_title=title,
+                expected_title=expected_title,
+                normalized_release=normalize_title(title).lower(),
             )
             return None
 
@@ -221,9 +248,21 @@ class ProwlarrSource(ReleaseSource):
         # Filter by format type
         if format_type == "audiobook" and not is_audio:
             # Skip ebooks when searching for audiobooks
+            logger.info(
+                "prowlarr_drop_not_audiobook",
+                release_title=title,
+                category_ids=category_ids,
+                detected_format=fmt,
+            )
             return None
         elif format_type == "ebook" and is_audio:
             # Skip audiobooks when searching for ebooks
+            logger.info(
+                "prowlarr_drop_not_ebook",
+                release_title=title,
+                category_ids=category_ids,
+                detected_format=fmt,
+            )
             return None
 
         # Calculate quality score
