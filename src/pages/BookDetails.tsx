@@ -390,6 +390,208 @@ export default function BookDetails() {
 
   const authorHref = `/author?name=${encodeURIComponent(displayAuthor)}`;
 
+  // The actionable region (library download/email, Listen Now, request /
+  // download buttons) is rendered once near the top of the hero and, on mobile
+  // only, duplicated at the very bottom so it's reachable after scrolling past
+  // the description. Extracted into helpers so the conditionals live in one
+  // place.
+  const hasLibraryCard = Boolean(
+    calibre && (calibreEbookFormats.length > 0 || calibreAudioFormats.length > 0),
+  );
+  const hasListenCard = Boolean(listenNowUrl);
+  const hasAnyActionButton = Boolean(
+    (canDownload && hasMissingFormat) ||
+      (!hasAnyRequests && hasMissingFormat && canRequestAnything) ||
+      (hasAnyRequests && !ebookAvailable && !audiobookAvailable) ||
+      (hasAnyRequests && canClearRequests),
+  );
+  const hasActionRegion =
+    hasLibraryCard || hasListenCard || hasAnyActionButton || Boolean(book.hardcoverSlug);
+
+  const renderLibraryCard = () => {
+    if (!hasLibraryCard || !calibre) return null;
+    return (
+      <div className="rounded-xl md:rounded-2xl border border-border/50 bg-card/30 p-4 md:p-5 space-y-4">
+        <div className="flex items-center gap-2">
+          <Library className="h-4 w-4 text-primary" />
+          <h2 className="text-sm font-semibold text-foreground">In your library</h2>
+          {isAdmin && (
+            <span className="ml-auto flex flex-wrap gap-1">
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={calibreLinkMutation.isPending}
+                onClick={() => calibreLinkMutation.mutate('refresh')}
+              >
+                Refresh
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={calibreLinkMutation.isPending}
+                onClick={() => setSourcesOpen(true)}
+              >
+                Choose source
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={calibreLinkMutation.isPending}
+                onClick={() => setRelinkOpen(true)}
+              >
+                Change
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={calibreLinkMutation.isPending}
+                onClick={() => calibreLinkMutation.mutate('unlink')}
+              >
+                Unlink
+              </Button>
+            </span>
+          )}
+        </div>
+        {calibreEbookFormats.length > 0 && (
+          <CalibreFormatActions
+            calibreBookId={calibre.calibre_book_id}
+            formats={calibreEbookFormats}
+            heading={calibreAudioFormats.length > 0 ? 'eBook' : null}
+          />
+        )}
+        {calibreAudioFormats.length > 0 && (
+          <CalibreFormatActions
+            calibreBookId={calibre.calibre_book_id}
+            formats={calibreAudioFormats}
+            heading={calibreEbookFormats.length > 0 ? 'Audiobook' : null}
+          />
+        )}
+      </div>
+    );
+  };
+
+  const renderListenCard = () => {
+    if (!listenNowUrl) return null;
+    return (
+      <div className="rounded-xl md:rounded-2xl border border-border/50 bg-card/30 p-4 md:p-5 space-y-3">
+        <div className="flex items-center gap-2">
+          <Headphones className="h-4 w-4 text-violet-400" />
+          <h2 className="text-sm font-semibold text-foreground">
+            {hasLibraryCard ? 'Listen on Audiobookshelf' : 'In your library'}
+          </h2>
+        </div>
+        <Button
+          asChild
+          className="w-full sm:w-auto h-11 px-5 rounded-xl bg-violet-600 hover:bg-violet-500 text-white font-medium shadow-lg shadow-violet-600/25 transition-[background-color,box-shadow] duration-300 hover:shadow-violet-500/40"
+        >
+          <a href={listenNowUrl} target="_blank" rel="noopener noreferrer">
+            <Headphones className="h-4 w-4 mr-2" />
+            Listen Now
+          </a>
+        </Button>
+      </div>
+    );
+  };
+
+  const renderHardcoverButton = (className: string) =>
+    book.hardcoverSlug ? (
+      <Button size="lg" variant="outline" asChild className={className}>
+        <a
+          href={`https://hardcover.app/books/${book.hardcoverSlug}`}
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          <ExternalLink className="h-4 w-4 mr-2" />
+          View on Hardcover
+        </a>
+      </Button>
+    ) : null;
+
+  const renderActionButtons = (opts?: { hardcoverClassName?: string }) => (
+    <>
+      {/* Direct Download button - show when direct downloads enabled */}
+      {canDownload && hasMissingFormat && directDownloadsEnabled && (
+        <Button
+          size="lg"
+          onClick={() => {
+            setSearchFormat(preferredFormat || 'ebook');
+            setSearchSource('direct');
+            setSearchOpen(true);
+          }}
+          className="w-full sm:w-auto h-12 px-6 rounded-xl bg-green-600 hover:bg-green-500 text-white font-medium shadow-lg shadow-green-600/25 transition-[background-color,box-shadow] duration-300 hover:shadow-green-500/40"
+        >
+          <Globe className="h-4 w-4 mr-2" />
+          Direct Download
+        </Button>
+      )}
+
+      {/* Prowlarr Download button - show when user can download */}
+      {canDownload && hasMissingFormat && (
+        <Button
+          size="lg"
+          variant={directDownloadsEnabled ? 'outline' : 'default'}
+          onClick={() => {
+            setSearchFormat(preferredFormat || 'ebook');
+            setSearchSource('prowlarr');
+            setSearchOpen(true);
+          }}
+          className={
+            directDownloadsEnabled
+              ? 'w-full sm:w-auto h-12 px-6 rounded-xl border-border/50 hover:bg-card hover:border-primary/30'
+              : 'w-full sm:w-auto h-12 px-6 rounded-xl bg-primary hover:bg-primary/90 text-primary-foreground font-medium shadow-lg shadow-primary/25 transition-[background-color,box-shadow] duration-300 hover:shadow-primary/40'
+          }
+        >
+          <Search className="h-4 w-4 mr-2" />
+          Search Prowlarr
+        </Button>
+      )}
+
+      {/* Request button - show if no downloads in progress and can request */}
+      {!hasAnyRequests && hasMissingFormat && canRequestAnything && (
+        <Button
+          size="lg"
+          variant="outline"
+          onClick={() => setRequestOpen(true)}
+          className="w-full sm:w-auto h-12 px-6 rounded-xl border-border/50 hover:bg-card hover:border-primary/30"
+        >
+          <Clock className="h-4 w-4 mr-2" />
+          {preferredFormat === 'ebook'
+            ? 'Request eBook'
+            : preferredFormat === 'audiobook'
+              ? 'Request Audiobook'
+              : 'Request Book'}
+        </Button>
+      )}
+
+      {/* Processing indicator */}
+      {hasAnyRequests && !ebookAvailable && !audiobookAvailable && (
+        <div className="flex w-full sm:w-auto items-center justify-center sm:justify-start gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-5 py-3 text-sm font-medium text-amber-400">
+          <Clock className="h-4 w-4" />
+          Requested • Processing
+        </div>
+      )}
+
+      {opts?.hardcoverClassName ? renderHardcoverButton(opts.hardcoverClassName) : null}
+
+      {hasAnyRequests && canClearRequests && (
+        <Button
+          size="lg"
+          variant="outline"
+          onClick={() => clearRequestsMutation.mutate()}
+          disabled={clearRequestsMutation.isPending}
+          className="w-full sm:w-auto h-12 px-6 rounded-xl border-rose-500/30 text-rose-400 hover:bg-rose-500/10 hover:border-rose-500/50"
+        >
+          <Trash2 className="h-4 w-4 mr-2" />
+          {clearRequestsMutation.isPending
+            ? 'Clearing...'
+            : isAdmin
+              ? 'Clear Request'
+              : 'Cancel My Request'}
+        </Button>
+      )}
+    </>
+  );
+
   return (
     <>
       <div className="space-y-8 md:space-y-10 animate-fade-in-up">
@@ -586,186 +788,41 @@ export default function BookDetails() {
                 )}
               </div>
 
-              {/* In your library — download / email straight from Calibre */}
-              {calibre && (calibreEbookFormats.length > 0 || calibreAudioFormats.length > 0) && (
-                <div className="rounded-xl md:rounded-2xl border border-border/50 bg-card/30 p-4 md:p-5 space-y-4">
-                  <div className="flex items-center gap-2">
-                    <Library className="h-4 w-4 text-primary" />
-                    <h2 className="text-sm font-semibold text-foreground">In your library</h2>
-                    {isAdmin && (
-                      <span className="ml-auto flex flex-wrap gap-1">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          disabled={calibreLinkMutation.isPending}
-                          onClick={() => calibreLinkMutation.mutate('refresh')}
-                        >
-                          Refresh
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          disabled={calibreLinkMutation.isPending}
-                          onClick={() => setSourcesOpen(true)}
-                        >
-                          Choose source
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          disabled={calibreLinkMutation.isPending}
-                          onClick={() => setRelinkOpen(true)}
-                        >
-                          Change
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          disabled={calibreLinkMutation.isPending}
-                          onClick={() => calibreLinkMutation.mutate('unlink')}
-                        >
-                          Unlink
-                        </Button>
-                      </span>
-                    )}
-                  </div>
-                  {calibreEbookFormats.length > 0 && (
-                    <CalibreFormatActions
-                      calibreBookId={calibre.calibre_book_id}
-                      formats={calibreEbookFormats}
-                      heading={calibreAudioFormats.length > 0 ? 'eBook' : null}
-                    />
-                  )}
-                  {calibreAudioFormats.length > 0 && (
-                    <CalibreFormatActions
-                      calibreBookId={calibre.calibre_book_id}
-                      formats={calibreAudioFormats}
-                      heading={calibreEbookFormats.length > 0 ? 'Audiobook' : null}
-                    />
-                  )}
+              {/* Actionable region — library download/email, Listen Now and the
+                  request/download buttons. Rendered here near the top; on mobile
+                  it's duplicated at the bottom of the page (block below). */}
+              {renderLibraryCard()}
+              {renderListenCard()}
+
+              {(hasAnyActionButton || book.hardcoverSlug) && (
+                <div className="grid grid-cols-1 gap-2.5 pt-1 sm:flex sm:flex-wrap sm:gap-3 sm:pt-4">
+                  {/* On mobile "View on Hardcover" is not shown here — it lives
+                      in the bottom block instead. */}
+                  {renderActionButtons({
+                    hardcoverClassName:
+                      'hidden md:inline-flex w-full sm:w-auto h-12 px-6 rounded-xl border-border/50 hover:bg-card hover:border-primary/30',
+                  })}
                 </div>
               )}
 
-              {/* Listen on Audiobookshelf — deep link for a linked ABS item */}
-              {listenNowUrl && (
-                <div className="rounded-xl md:rounded-2xl border border-border/50 bg-card/30 p-4 md:p-5 space-y-3">
-                  <div className="flex items-center gap-2">
-                    <Headphones className="h-4 w-4 text-violet-400" />
-                    <h2 className="text-sm font-semibold text-foreground">
-                      {calibre && (calibreEbookFormats.length > 0 || calibreAudioFormats.length > 0)
-                        ? 'Listen on Audiobookshelf'
-                        : 'In your library'}
-                    </h2>
-                  </div>
-                  <Button
-                    asChild
-                    className="w-full sm:w-auto h-11 px-5 rounded-xl bg-violet-600 hover:bg-violet-500 text-white font-medium shadow-lg shadow-violet-600/25 transition-[background-color,box-shadow] duration-300 hover:shadow-violet-500/40"
-                  >
-                    <a href={listenNowUrl} target="_blank" rel="noopener noreferrer">
-                      <Headphones className="h-4 w-4 mr-2" />
-                      Listen Now
-                    </a>
-                  </Button>
+              {/* Mobile only — the same actions again after the description so
+                  they're in reach without scrolling back up. `order-last` keeps
+                  it below the description; `md:hidden` means desktop never
+                  duplicates. */}
+              {hasActionRegion && (
+                <div className="order-last md:hidden flex flex-col gap-4 pt-5 border-t border-border/40">
+                  {renderLibraryCard()}
+                  {renderListenCard()}
+                  {(hasAnyActionButton || book.hardcoverSlug) && (
+                    <div className="grid grid-cols-1 gap-2.5">
+                      {renderActionButtons({
+                        hardcoverClassName:
+                          'w-full h-12 px-6 rounded-xl border-border/50 hover:bg-card hover:border-primary/30',
+                      })}
+                    </div>
+                  )}
                 </div>
               )}
-
-              {/* Action buttons — full-width stacked on mobile so the primary
-                  calls to action read as a clean panel; inline row on sm+. */}
-              <div className="grid grid-cols-1 gap-2.5 pt-1 sm:flex sm:flex-wrap sm:gap-3 sm:pt-4">
-                {/* Direct Download button - show when direct downloads enabled */}
-                {canDownload && hasMissingFormat && directDownloadsEnabled && (
-                  <Button
-                    size="lg"
-                    onClick={() => {
-                      setSearchFormat(preferredFormat || 'ebook');
-                      setSearchSource('direct');
-                      setSearchOpen(true);
-                    }}
-                    className="w-full sm:w-auto h-12 px-6 rounded-xl bg-green-600 hover:bg-green-500 text-white font-medium shadow-lg shadow-green-600/25 transition-[background-color,box-shadow] duration-300 hover:shadow-green-500/40"
-                  >
-                    <Globe className="h-4 w-4 mr-2" />
-                    Direct Download
-                  </Button>
-                )}
-
-                {/* Prowlarr Download button - show when user can download */}
-                {canDownload && hasMissingFormat && (
-                  <Button
-                    size="lg"
-                    variant={directDownloadsEnabled ? "outline" : "default"}
-                    onClick={() => {
-                      setSearchFormat(preferredFormat || 'ebook');
-                      setSearchSource('prowlarr');
-                      setSearchOpen(true);
-                    }}
-                    className={directDownloadsEnabled
-                      ? "w-full sm:w-auto h-12 px-6 rounded-xl border-border/50 hover:bg-card hover:border-primary/30"
-                      : "w-full sm:w-auto h-12 px-6 rounded-xl bg-primary hover:bg-primary/90 text-primary-foreground font-medium shadow-lg shadow-primary/25 transition-[background-color,box-shadow] duration-300 hover:shadow-primary/40"
-                    }
-                  >
-                    <Search className="h-4 w-4 mr-2" />
-                    Search Prowlarr
-                  </Button>
-                )}
-
-                {/* Request button - show if no downloads in progress and can request */}
-                {!hasAnyRequests && hasMissingFormat && canRequestAnything && (
-                  <Button
-                    size="lg"
-                    variant="outline"
-                    onClick={() => setRequestOpen(true)}
-                    className="w-full sm:w-auto h-12 px-6 rounded-xl border-border/50 hover:bg-card hover:border-primary/30"
-                  >
-                    <Clock className="h-4 w-4 mr-2" />
-                    {preferredFormat === 'ebook'
-                      ? 'Request eBook'
-                      : preferredFormat === 'audiobook'
-                        ? 'Request Audiobook'
-                        : 'Request Book'}
-                  </Button>
-                )}
-
-                {/* Processing indicator */}
-                {hasAnyRequests && !ebookAvailable && !audiobookAvailable && (
-                  <div className="flex w-full sm:w-auto items-center justify-center sm:justify-start gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-5 py-3 text-sm font-medium text-amber-400">
-                    <Clock className="h-4 w-4" />
-                    Requested • Processing
-                  </div>
-                )}
-                {book.hardcoverSlug && (
-                  <Button
-                    size="lg"
-                    variant="outline"
-                    asChild
-                    className="w-full sm:w-auto h-12 px-6 rounded-xl border-border/50 hover:bg-card hover:border-primary/30"
-                  >
-                    <a
-                      href={`https://hardcover.app/books/${book.hardcoverSlug}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                    >
-                      <ExternalLink className="h-4 w-4 mr-2" />
-                      View on Hardcover
-                    </a>
-                  </Button>
-                )}
-                {hasAnyRequests && canClearRequests && (
-                  <Button
-                    size="lg"
-                    variant="outline"
-                    onClick={() => clearRequestsMutation.mutate()}
-                    disabled={clearRequestsMutation.isPending}
-                    className="w-full sm:w-auto h-12 px-6 rounded-xl border-rose-500/30 text-rose-400 hover:bg-rose-500/10 hover:border-rose-500/50"
-                  >
-                    <Trash2 className="h-4 w-4 mr-2" />
-                    {clearRequestsMutation.isPending
-                      ? 'Clearing...'
-                      : isAdmin
-                        ? 'Clear Request'
-                        : 'Cancel My Request'}
-                  </Button>
-                )}
-              </div>
             </div>
           </div>
         </div>
