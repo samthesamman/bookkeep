@@ -44,12 +44,23 @@ def test_titles_match(wanted, got, expected):
         ("Thinking, Fast and Slow", "Workbook For Thinking, Fast and Slow", True),
         ("The Body Keeps the Score", "Summary & Analysis of The Body Keeps the Score", True),
         ("Sapiens", "Blinkist Summary of Sapiens", True),
+        ("The Great Gatsby", "Study Guide: The Great Gatsby", True),
+        ("The Great Gatsby", "The Great Gatsby (SparkNotes Literature Guide)", True),
+        ("The Great Gatsby", "GradeSaver(tm) ClassicNotes The Great Gatsby", True),
+        ("The Great Gatsby", "LitCharts: The Great Gatsby", True),
+        ("The Great Gatsby", "The Great Gatsby - Reading Guide", True),
+        ("The Great Gatsby", "The Great Gatsby: Study Notes", True),
+        ("The Great Gatsby", "The Great Gatsby (Cliffs Notes)", True),
         # real book, not a companion work
         ("Atomic Habits", "Atomic Habits: An Easy & Proven Way to Build Good Habits", False),
         ("Sapiens", "Sapiens: A Brief History of Humankind", False),
-        # the caller genuinely wants the summary/workbook
+        ("A Field Guide to the Birds", "A Field Guide to the Birds of Eastern North America", False),
+        ("The Hitchhiker's Guide to the Galaxy", "The Hitchhiker's Guide to the Galaxy", False),
+        ("Notes from Underground", "Notes from Underground", False),
+        # the caller genuinely wants the summary/workbook/guide
         ("Summary of Atomic Habits", "Summary of Atomic Habits", False),
         ("The Anxiety and Phobia Workbook", "The Anxiety and Phobia Workbook", False),
+        ("A Study Guide for Fitzgerald's Gatsby", "A Study Guide for Fitzgerald's Gatsby", False),
     ],
 )
 def test_is_derivative_title(wanted, got, expected):

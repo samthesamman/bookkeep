@@ -28,11 +28,19 @@ def _main(text: str) -> set[str]:
 _DERIVATIVE_MARKERS = re.compile(
     r"\b("
     r"summary|summaries|abridged|abridgement|"
-    r"workbook|study guide|study-guide|reading guide|discussion guide|"
-    r"key takeaways|key insights|key points|key ideas|"
+    r"workbook|worksheets?|"
+    # "study guide", "literature guide", "reading/teacher's/discussion guide", etc.
+    r"(?:study|reading|literature|literary|discussion|teaching|teacher'?s?|"
+    r"educator'?s?|instructor'?s?|lesson|novel|classroom|curriculum)[\s-]*guides?|"
+    r"study[\s-]*guides?|studyguides?|"
+    # "study notes", "revision notes", "chapter notes", etc. (not bare "notes" —
+    # real titles like "Notes from Underground" use it)
+    r"(?:study|revision|chapter|reader'?s?|lecture|class|reading)[\s-]*notes|"
+    r"key takeaways|key insights|key points|key ideas|major themes|"
     r"conversation starters|companion|sidekick|quick ?read|quicklet|"
-    r"instaread|blinkist|cliffs?notes|sparknotes|getflashnotes|sumoreads|"
-    r"trivia (?:on|for)|book review"
+    r"instaread|blinkist|cliffs?[\s-]*notes|spark[\s-]*notes|shmoop|gradesaver|"
+    r"supersummary|super summary|getflashnotes|sumoreads|classicnotes|litcharts|"
+    r"trivia (?:on|for)|book review|analysis and summary|summary and analysis"
     r")\b",
     re.IGNORECASE,
 )
