@@ -729,30 +729,37 @@ class DownloadOrchestrator:
 
             async def _work() -> None:
                 if abs_configured:
-                    from ..routers.audiobookshelf import (
-                        get_default_audiobookshelf_server,
-                        get_audiobookshelf_max_added_at,
-                        trigger_audiobookshelf_scan,
-                        link_and_match_new_audiobook,
-                    )
-                    inner_db = SessionLocal()
                     try:
-                        server = get_default_audiobookshelf_server(inner_db)
-                        server_id = server.id if server else None
-                        if server is not None:
-                            baseline_ms = await get_audiobookshelf_max_added_at(server)
-                            if not baseline_ms:
-                                baseline_ms = int(
-                                    (datetime.now(timezone.utc).timestamp() - 120) * 1000
-                                )
-                            await trigger_audiobookshelf_scan(server)
-                    finally:
-                        inner_db.close()
-                    if server_id is not None:
-                        await link_and_match_new_audiobook(server_id, book_id, baseline_ms)
+                        from ..routers.audiobookshelf import (
+                            get_default_audiobookshelf_server,
+                            get_audiobookshelf_max_added_at,
+                            trigger_audiobookshelf_scan,
+                            link_and_match_new_audiobook,
+                        )
+                        inner_db = SessionLocal()
+                        try:
+                            server = get_default_audiobookshelf_server(inner_db)
+                            server_id = server.id if server else None
+                            if server is not None:
+                                baseline_ms = await get_audiobookshelf_max_added_at(server)
+                                if not baseline_ms:
+                                    baseline_ms = int(
+                                        (datetime.now(timezone.utc).timestamp() - 120) * 1000
+                                    )
+                                await trigger_audiobookshelf_scan(server)
+                        finally:
+                            inner_db.close()
+                        if server_id is not None:
+                            await link_and_match_new_audiobook(server_id, book_id, baseline_ms)
+                    except Exception as e:  # pragma: no cover - network/defensive
+                        logger.warning(
+                            "orchestrator_abs_match_failed", book_id=book_id, error=str(e)
+                        )
 
+                # Always run — even if the Audiobookshelf step failed, the
+                # download itself succeeded and the request should go available.
                 from ..tasks import promote_and_email
-                await promote_and_email()
+                await promote_and_email(book_id, "audiobook")
 
             try:
                 asyncio.run(_work())
@@ -766,14 +773,14 @@ class DownloadOrchestrator:
             target=_run, daemon=True, name=f"after-audiobook-import-{book_id}"
         ).start()
 
-    def _send_availability_email(self, book_id: Optional[int]) -> None:
+    def _send_availability_email(self, book_id: Optional[int], fmt: str = "ebook") -> None:
         """Promote a freshly-imported request and email the user now, on a daemon
         thread. Idempotent — safe alongside the periodic jobs."""
         def _run() -> None:
             import asyncio
             try:
                 from ..tasks import promote_and_email
-                asyncio.run(promote_and_email())
+                asyncio.run(promote_and_email(book_id, fmt))
             except Exception as e:  # pragma: no cover - defensive
                 logger.warning(
                     "orchestrator_availability_email_failed", book_id=book_id, error=str(e)

@@ -1146,7 +1146,7 @@ async def create_request_hardlink(
     # Promote any waiting request and email the user now (runs after the match
     # task above, since background tasks execute in order).
     from app.tasks import promote_and_email
-    background_tasks.add_task(promote_and_email)
+    background_tasks.add_task(promote_and_email, db_request.book_id, "audiobook")
 
     if scan_requested:
         abs_note = " — Audiobookshelf scan started; metadata match will follow"

@@ -133,6 +133,7 @@ class ProwlarrSource(ReleaseSource):
                     "prowlarr_raw_result",
                     idx=i,
                     title=result.get("title"),
+                    file_name=result.get("fileName") or result.get("filename"),
                     protocol=result.get("protocol"),
                     seeders=result.get("seeders"),
                     size=result.get("size"),
@@ -243,8 +244,11 @@ class ProwlarrSource(ReleaseSource):
         # Parse Prowlarr result
         parsed = ProwlarrClient.parse_prowlarr_result(prowlarr_result)
 
-        # Extract metadata from title
-        fmt = extract_format(title)
+        # Extract metadata from title. Prowlarr sometimes exposes the torrent's
+        # actual file name, which carries the real format when the display title
+        # does not (two releases with an identical title, one m4b, one mp3).
+        file_name = prowlarr_result.get("fileName") or prowlarr_result.get("filename")
+        fmt = extract_format(title, file_name)
         language = extract_language(title)
 
         # Detect if audiobook (from categories or format)
@@ -272,11 +276,15 @@ class ProwlarrSource(ReleaseSource):
             )
             return None
 
-        # Calculate quality score
+        # Calculate quality score. Pass the resolved format / audiobook flag so
+        # scoring uses the reliable signals (filename, Prowlarr category) rather
+        # than re-sniffing the display title.
         quality = calculate_quality_score(
             parsed,
             preferred_format=fmt,
-            min_seeders=1
+            min_seeders=1,
+            detected_format=fmt,
+            is_audio=is_audio,
         )
 
         # Prefer releases whose title actually contains the author name, but
@@ -307,6 +315,15 @@ class ProwlarrSource(ReleaseSource):
             },
             publish_date=parsed.get("publish_date"),
             info_url=parsed.get("info_url"),
+        )
+
+        logger.debug(
+            "prowlarr_release_scored",
+            title=title,
+            file_name=file_name,
+            detected_format=fmt,
+            is_audiobook=is_audio,
+            quality_score=quality,
         )
 
         return release

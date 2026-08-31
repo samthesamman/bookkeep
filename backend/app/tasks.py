@@ -979,24 +979,57 @@ async def send_availability_emails():
         db.close()
 
 
-async def promote_and_email() -> None:
-    """Promote freshly-completed requests to ``available`` and send their
-    availability emails right now, instead of waiting for the periodic jobs.
+async def promote_and_email(book_id: Optional[int] = None, fmt: Optional[str] = None) -> None:
+    """Promote freshly-completed request(s) to ``available``, drop the request
+    cache, and send their availability emails right now instead of waiting for
+    the periodic jobs.
 
-    Both steps are idempotent and self-selecting (they scan for work and no-op
-    when there is none), so this is safe to call after any download finishes and
-    is purely additive to ``check_processing_requests`` / ``send_availability_emails``.
+    With ``book_id`` (and optionally ``fmt``): flip that book's open request(s)
+    directly — used straight after an import + Audiobookshelf match, where the
+    generic reconcile might not see the download task as ``imported`` yet.
+    Without it: run the full processing-request reconcile.
+
+    Idempotent and self-selecting, so safe to call redundantly.
     """
+    from app.models import Book, BookRequest
     from app.routers.requests import update_processing_requests_status
 
+    _OPEN = ("pending", "approved", "processing", "not_found")
+    changed = False
     db: Session = SessionLocal()
     try:
-        await update_processing_requests_status(db)
+        if book_id is not None:
+            book = db.query(Book).filter(Book.id == book_id).first()
+            q = db.query(BookRequest).filter(
+                BookRequest.book_id == book_id,
+                BookRequest.status.in_(_OPEN),
+            )
+            if fmt:
+                q = q.filter(BookRequest.format == fmt)
+            now = datetime.now(timezone.utc)
+            for req in q.all():
+                req.status = "available"
+                req.updated_at = now
+                if book and req.format == "ebook":
+                    book.ebook_available = True
+                elif book and req.format == "audiobook":
+                    book.audiobook_available = True
+                changed = True
+            if changed:
+                db.commit()
+        else:
+            # update_processing_requests_status commits and busts the cache itself.
+            await update_processing_requests_status(db)
     except Exception as e:
-        logger.error("promote_and_email_promote_error", error=str(e))
+        logger.error("promote_and_email_promote_error", book_id=book_id, error=str(e))
         db.rollback()
     finally:
         db.close()
+
+    if changed:
+        from app.cache import clear_cache_pattern
+        await clear_cache_pattern("requests_by_hardcover:*")
+        await clear_cache_pattern("requests_by_hardcover_batch:*")
 
     try:
         await send_availability_emails()

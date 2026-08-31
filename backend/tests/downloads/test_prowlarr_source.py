@@ -285,6 +285,42 @@ class TestConvertToRelease:
 
         assert release is None
 
+    def test_convert_detects_format_from_filename(self, mock_prowlarr_source):
+        """Format lives in the torrent filename, not the display title"""
+        prowlarr_result = {
+            "title": "Some Great Book - Author Name",
+            "fileName": "Some Great Book - Author Name.m4b",
+            "size": 300000000,
+            "downloadUrl": "http://download/1",
+            "protocol": "torrent",
+            "seeders": 5,
+            "categories": [{"id": 3030, "name": "Audio/Audiobook"}],
+        }
+
+        release = mock_prowlarr_source._convert_to_release(prowlarr_result, "audiobook")
+
+        assert release is not None
+        assert release.format == "m4b"
+
+    def test_convert_m4b_outranks_identical_mp3(self, mock_prowlarr_source):
+        """Identical titles, format only in filename: m4b scores higher"""
+        base = {
+            "title": "Some Great Book - Author Name",
+            "size": 300000000,
+            "protocol": "torrent",
+            "seeders": 5,
+            "categories": [{"id": 3030, "name": "Audio/Audiobook"}],
+        }
+        m4b = mock_prowlarr_source._convert_to_release(
+            {**base, "fileName": "Some Great Book.m4b", "downloadUrl": "http://d/1"},
+            "audiobook",
+        )
+        mp3 = mock_prowlarr_source._convert_to_release(
+            {**base, "fileName": "Some Great Book.mp3", "downloadUrl": "http://d/2"},
+            "audiobook",
+        )
+        assert m4b.quality_score > mp3.quality_score
+
     def test_convert_missing_title(self, mock_prowlarr_source):
         prowlarr_result = {
             "title": "",

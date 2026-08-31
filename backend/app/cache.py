@@ -147,17 +147,23 @@ async def clear_cache_pattern(pattern: str) -> int:
         # Get the namespace (used by both backends)
         namespace = getattr(cache_instance, 'namespace', '')
 
+        # Build the namespaced pattern the SAME way aiocache builds real keys.
+        # aiocache 0.12 concatenates namespace + key with NO separator, so a
+        # pattern like "bookkeep:requests_by_hardcover:*" never matches the real
+        # key "bookkeeprequests_by_hardcover:...". Use build_key to stay in sync.
+        if hasattr(cache_instance, 'build_key'):
+            full_pattern = cache_instance.build_key(pattern)
+        elif namespace:
+            full_pattern = f"{namespace}{pattern}"
+        else:
+            full_pattern = pattern
+
         # Check if this is a Redis backend by looking at the class name
         cache_class = cache_instance.__class__.__name__
         is_redis = 'Redis' in cache_class
 
         if is_redis:
             # Redis backend - use redis-py directly to scan and delete keys
-            # Build the full pattern with namespace
-            if namespace:
-                full_pattern = f"{namespace}:{pattern}"
-            else:
-                full_pattern = pattern
 
             # aiocache's RedisCache doesn't expose the client directly,
             # so we need to create our own Redis connection for pattern deletion
@@ -226,12 +232,6 @@ async def clear_cache_pattern(pattern: str) -> int:
 
             if cache_dict is not None:
                 keys_to_delete = []
-
-                # Build full pattern with namespace for matching
-                if namespace:
-                    full_pattern = f"{namespace}:{pattern}"
-                else:
-                    full_pattern = pattern
 
                 # Log all keys for debugging (limit to avoid huge logs)
                 all_keys = list(cache_dict.keys())

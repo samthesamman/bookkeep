@@ -42,6 +42,10 @@ FORMAT_PATTERNS = {
 # Audiobook-specific formats (prioritize these)
 AUDIOBOOK_FORMATS = {"m4b", "mp3", "m4a", "aac", "flac", "ogg", "opus"}
 
+# Iteration order for extract_format when a release mentions more than one
+# audiobook format (e.g. a pack tagged "M4B/MP3"): the better container wins.
+_AUDIOBOOK_FORMAT_PRIORITY = ("m4b", "m4a", "aac", "flac", "ogg", "opus", "mp3")
+
 # Preference bonus between audiobook containers. m4b is a single file with
 # embedded chapters/bookmarks, so it is preferred over loose mp3 tracks.
 AUDIOBOOK_FORMAT_BONUS = {
@@ -195,8 +199,9 @@ def extract_format(title: str, filename: Optional[str] = None) -> Optional[str]:
 
     text_lower = text.lower()
 
-    # Check audiobook formats first (more specific)
-    for fmt in AUDIOBOOK_FORMATS:
+    # Check audiobook formats first (more specific), best container first so a
+    # release advertising both "M4B" and "MP3" resolves to m4b.
+    for fmt in _AUDIOBOOK_FORMAT_PRIORITY:
         pattern = FORMAT_PATTERNS.get(fmt)
         if pattern and re.search(pattern, text, re.IGNORECASE):
             return fmt
@@ -428,7 +433,9 @@ def build_search_queries(
 def calculate_quality_score(
     result: dict,
     preferred_format: Optional[str] = None,
-    min_seeders: int = 1
+    min_seeders: int = 1,
+    detected_format: Optional[str] = None,
+    is_audio: Optional[bool] = None,
 ) -> float:
     """
     Calculate quality score for a release (0-100).
@@ -441,22 +448,36 @@ def calculate_quality_score(
         result: Parsed Prowlarr result
         preferred_format: Preferred format (e.g., "epub", "m4b")
         min_seeders: Minimum seeders threshold
+        detected_format: The release's actual format if the caller already
+            resolved it (e.g. from the torrent filename, not just the title).
+            Falls back to sniffing ``result["title"]``.
+        is_audio: Whether the release is an audiobook, if the caller already
+            knows (e.g. from the Prowlarr category). Falls back to sniffing
+            ``result["title"]``.
 
     Returns:
         Quality score (0.0 to 100.0)
     """
     score = 50.0  # Base score
 
+    fmt = (
+        detected_format
+        if detected_format is not None
+        else extract_format(result.get("title", ""))
+    )
+    audio = (
+        is_audio
+        if is_audio is not None
+        else is_audiobook(result.get("title", ""))
+    )
+
     # Format match (+20 points)
-    if preferred_format:
-        fmt = extract_format(result.get("title", ""))
-        if fmt == preferred_format:
-            score += 20
+    if preferred_format and fmt == preferred_format:
+        score += 20
 
     # Audiobook container preference: rank m4b above mp3, etc.
-    if is_audiobook(result.get("title", "")):
-        audio_fmt = extract_format(result.get("title", ""))
-        score += AUDIOBOOK_FORMAT_BONUS.get(audio_fmt, 0)
+    if audio:
+        score += AUDIOBOOK_FORMAT_BONUS.get(fmt, 0)
 
     # Seeder count (0 to +15 points)
     seeders = result.get("seeders", 0)
@@ -472,7 +493,7 @@ def calculate_quality_score(
     if size_bytes:
         size_mb = size_bytes / (1024 * 1024)
         # Ebooks should be 0.5-50 MB, audiobooks 50-500 MB
-        if is_audiobook(result.get("title", "")):
+        if audio:
             if 50 <= size_mb <= 1000:
                 score += 10
             elif size_mb < 10 or size_mb > 2000:
