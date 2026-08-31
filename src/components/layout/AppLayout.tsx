@@ -41,7 +41,9 @@ export function AppLayout() {
       {/* Main content. The Suspense boundary lives here (not around the whole
           router) so lazy page chunks don't unmount the layout, the sidebar, or
           the scroll-restoration bookkeeping on every navigation. */}
-      <main className="relative pt-24 sm:pt-16 md:ml-64">
+      {/* pt on mobile must clear the fixed Header, which wraps to two rows
+          (menu button + full-width search ≈ 120px) below the sm breakpoint. */}
+      <main className="relative pt-32 sm:pt-16 md:ml-64">
         <div className="p-4 sm:p-6 lg:p-8">
           {GEOCITIES_MODE && <GeocitiesBanner />}
           <Suspense
