@@ -1497,7 +1497,11 @@ async def sync_from_audiobookshelf():
     - Updates existing books with audiobookshelf_id links
     - Marks matching requests as "available"
     """
-    from app.routers.audiobookshelf import get_default_audiobookshelf_server, get_all_audiobookshelf_items
+    from app.routers.audiobookshelf import (
+        get_default_audiobookshelf_server,
+        get_all_audiobookshelf_items,
+        match_book_to_abs_item,
+    )
     from app.routers.hardcover import lookup_book_by_title_author
     from app.models import BookRequest, User
 
@@ -1564,12 +1568,26 @@ async def sync_from_audiobookshelf():
             if isbn:
                 db_book = db.query(Book).filter(Book.isbn == isbn).first()
 
-            # Try title + author match (case-insensitive)
+            # Try title + author match. Fast exact path first, then the
+            # normalized matcher (tolerates stripped punctuation / a missing
+            # subtitle / "Last, First" authors) over a surname-narrowed set.
             if not db_book and title and author:
                 db_book = db.query(Book).filter(
                     sa_func.lower(Book.title) == title.lower(),
                     sa_func.lower(Book.author) == author.lower()
                 ).first()
+
+            if not db_book and title and author:
+                parts = author.replace(",", " ").split()
+                surname = parts[-1] if parts else ""
+                if len(surname) >= 2:
+                    candidates = db.query(Book).filter(
+                        sa_func.lower(Book.author).like(f"%{surname.lower()}%")
+                    ).all()
+                    db_book = next(
+                        (b for b in candidates if match_book_to_abs_item(b, item)),
+                        None,
+                    )
 
             # Try Hardcover lookup by title+author
             if not db_book:

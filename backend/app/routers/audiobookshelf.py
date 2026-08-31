@@ -5,6 +5,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 from typing import Optional, Dict, Any, List
 import asyncio
+import os
 import httpx
 import structlog
 
@@ -14,6 +15,24 @@ from app.auth import get_current_user, require_admin
 logger = structlog.get_logger()
 
 router = APIRouter()
+
+# Metadata provider Audiobookshelf uses when asked to quick-match an item
+# (POST /api/items/:id/match, `{"provider": ...}`). Override with the
+# `audiobookshelf_match_provider` app setting or the AUDIOBOOKSHELF_MATCH_PROVIDER
+# env var. Audiobookshelf falls back to the library's own provider when omitted.
+DEFAULT_ABS_MATCH_PROVIDER = "audible"
+
+
+def get_audiobookshelf_match_provider(db: Session) -> str:
+    """Resolve the metadata provider to pass to Audiobookshelf's match endpoint."""
+    row = (
+        db.query(models.AppSettings)
+        .filter(models.AppSettings.key == "audiobookshelf_match_provider")
+        .first()
+    )
+    if row and row.value and row.value.strip():
+        return row.value.strip()
+    return os.getenv("AUDIOBOOKSHELF_MATCH_PROVIDER", DEFAULT_ABS_MATCH_PROVIDER)
 
 
 def get_default_audiobookshelf_server(db: Session) -> Optional[models.AudiobookshelfServer]:
@@ -222,18 +241,16 @@ async def link_and_match_new_audiobook(
     book_id: int,
     baseline_added_at_ms: int,
     *,
-    attempts: int = 18,
-    delay_seconds: float = 10.0,
+    attempts: int = 6,
+    delay_seconds: float = 5.0,
 ) -> None:
-    """Background job: after a scan, pick up every item Audiobookshelf newly
-    ingested (``addedAt`` past ``baseline_added_at_ms``), quick-match each so
-    Audiobookshelf refreshes its own metadata, and link the one that is this
-    request's book to ``Book.audiobookshelf_id``.
+    """After a scan, quick-match every Audiobookshelf item added since
+    ``baseline_added_at_ms`` and link this download's book to the new item.
 
-    Polls the ``addedAt``-sorted library list (cheap, capped) rather than a full
-    fetch. Keeps working if the scan was triggered by the folder watcher or a
-    manual scan. Gives up quietly after ``attempts`` — ``sync_from_audiobookshelf``
-    is the backstop.
+    The match runs entirely on the Audiobookshelf server against its own metadata
+    provider — we send no book metadata, so nothing here can affect our records.
+    Polls the ``addedAt``-sorted, minified item list and stops once a poll turns
+    up nothing new. ``sync_from_audiobookshelf`` is the backstop.
     """
     from app.database import SessionLocal
 
@@ -246,10 +263,11 @@ async def link_and_match_new_audiobook(
         if not server or not book:
             return
 
-        processed: set = set()
-        linked = bool(book.audiobookshelf_id)
+        provider = get_audiobookshelf_match_provider(db)
 
-        for attempt in range(1, attempts + 1):
+        # id -> item, for every item added since the scan started.
+        new_items: Dict[str, Dict[str, Any]] = {}
+        for _ in range(attempts):
             await asyncio.sleep(delay_seconds)
             try:
                 recent = await get_recently_added_audiobookshelf_items(server, baseline_added_at_ms)
@@ -257,43 +275,34 @@ async def link_and_match_new_audiobook(
                 logger.warning("audiobookshelf_recent_poll_error", book_id=book_id, error=str(e))
                 continue
 
-            fresh = [it for it in recent if it.get("id") and it["id"] not in processed]
+            fresh = [it for it in recent if it.get("id") and it["id"] not in new_items]
             for item in fresh:
-                item_id = item["id"]
-                processed.add(item_id)
-                meta = (item.get("media") or {}).get("metadata") or {}
-                is_this_book = match_book_to_abs_item(book, item)
-
-                if is_this_book and not linked:
-                    book.audiobookshelf_id = item_id
-                    book.audiobook_available = True
-                    db.commit()
-                    linked = True
-                    logger.info(
-                        "audiobookshelf_new_item_linked",
-                        book_id=book_id, item_id=item_id, attempt=attempt,
-                    )
-
-                await match_audiobookshelf_item(
-                    server, item_id,
-                    title=meta.get("title") or (book.title if is_this_book else None),
-                    author=meta.get("authorName") or (book.author if is_this_book else None),
-                    isbn=book.isbn if is_this_book else None,
-                )
+                new_items[item["id"]] = item
+                await match_audiobookshelf_item(server, item["id"], provider=provider)
                 await asyncio.sleep(1.0)
 
-            # Our book is in and this poll surfaced nothing new → the scan has
-            # settled, we're done.
-            if linked and not fresh:
+            # Nothing new after we've already seen something → the scan settled.
+            if new_items and not fresh:
+                break
+
+        # Link the book: the new item that matches by name, else the sole new one.
+        if not book.audiobookshelf_id and new_items:
+            target = next(
+                (iid for iid, it in new_items.items() if match_book_to_abs_item(book, it)),
+                None,
+            ) or (next(iter(new_items)) if len(new_items) == 1 else None)
+            if target:
+                book.audiobookshelf_id = target
+                book.audiobook_available = True
+                db.commit()
                 logger.info(
-                    "audiobookshelf_recent_match_complete",
-                    book_id=book_id, items_matched=len(processed),
+                    "audiobookshelf_new_item_linked", book_id=book_id, item_id=target
                 )
-                return
 
         logger.info(
-            "audiobookshelf_recent_match_timeout",
-            book_id=book_id, items_matched=len(processed), linked=linked,
+            "audiobookshelf_recent_match_done",
+            book_id=book_id, new_items=len(new_items),
+            linked=bool(book.audiobookshelf_id),
         )
     except Exception as e:  # pragma: no cover - defensive
         logger.error("audiobookshelf_link_and_match_error", book_id=book_id, error=str(e))
@@ -347,21 +356,48 @@ async def get_audiobookshelf_library_items(
         return []
 
 
+def _norm_for_match(value: Optional[str]) -> str:
+    """Lowercase, drop punctuation, collapse whitespace — so a title stripped of
+    ``:`` / ``?`` for an on-disk folder name still matches the real title."""
+    text = (value or "").lower()
+    for ch in ",.:;!?'\"()[]{}-":
+        text = text.replace(ch, " ")
+    return " ".join(text.split())
+
+
 def match_book_to_abs_item(book: models.Book, item: Dict[str, Any]) -> bool:
     """Check if an Audiobookshelf item matches a Book record by ISBN or title+author"""
-    media = item.get("media", {})
-    metadata = media.get("metadata", {})
+    metadata = (item.get("media") or {}).get("metadata") or {}
+
     item_isbn = metadata.get("isbn")
     if item_isbn and book.isbn and item_isbn == book.isbn:
         return True
-    item_title = metadata.get("title", "")
-    item_author = metadata.get("authorName", "")
-    if (item_title and book.title and
-            item_title.lower() == book.title.lower() and
-            item_author and book.author and
-            item_author.lower() == book.author.lower()):
-        return True
-    return False
+
+    item_title = _norm_for_match(metadata.get("title"))
+    item_author = _norm_for_match(metadata.get("authorName"))
+    book_title = _norm_for_match(book.title)
+    book_author = _norm_for_match(book.author)
+    if not (item_title and item_author and book_title and book_author):
+        return False
+
+    # Titles match outright, or one is the other minus a trailing subtitle.
+    # The subtitle tolerance needs a substantial shared stem so single-word
+    # titles don't collide ("Dune" vs "Dune Messiah", "It" vs "It Ends...").
+    shorter = min(item_title, book_title, key=len)
+    title_ok = item_title == book_title or (
+        len(shorter) >= 10
+        and (
+            book_title.startswith(item_title + " ")
+            or item_title.startswith(book_title + " ")
+        )
+    )
+    # Authors match outright, or share a surname ("Gil Duran" vs "Duran, Gil").
+    author_ok = (
+        item_author == book_author
+        or book_author.split()[-1] in item_author.split()
+        or item_author.split()[-1] in book_author.split()
+    )
+    return title_ok and author_ok
 
 
 async def search_audiobookshelf_items(
