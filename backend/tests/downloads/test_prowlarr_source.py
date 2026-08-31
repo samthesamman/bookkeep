@@ -617,6 +617,24 @@ class TestTitleMatches:
             "Blake Crouch - Dark Matter [EPUB]", "Dark Matter"
         ) is True
 
+    def test_short_title_subtitle_in_release_only(self, mock_prowlarr_source):
+        """Stored title 'Wool' should match a release that adds a subtitle"""
+        assert mock_prowlarr_source._title_matches(
+            "Wool: Silo Book 1 by Hugh Howey [EPUB]", "Wool"
+        ) is True
+
+    def test_short_title_subtitle_no_space_after_colon(self, mock_prowlarr_source):
+        """Colon separator works even without a following space"""
+        assert mock_prowlarr_source._title_matches(
+            "Hugh Howey - Wool:Silo Book 1", "Wool"
+        ) is True
+
+    def test_short_title_subtitle_still_rejects_no_colon(self, mock_prowlarr_source):
+        """Without a colon, 'Dune' must not match 'Dune Messiah'"""
+        assert mock_prowlarr_source._title_matches(
+            "Dune Messiah by Frank Herbert", "Dune"
+        ) is False
+
     # --- Long title tests (3+ significant words) ---
 
     def test_long_title_direct_containment(self, mock_prowlarr_source):

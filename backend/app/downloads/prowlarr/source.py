@@ -101,9 +101,11 @@ class ProwlarrSource(ReleaseSource):
         all_results = []
         seen_urls = set()  # Track unique results by download URL
 
-        # Try multiple queries to find more results
-        # Limit to first 4 queries to avoid excessive API calls
-        for query in queries[:4]:
+        # Try multiple queries to find more results. The cap keeps API usage
+        # bounded; the >=50-results early exit below means popular books stop
+        # after the first query or two, so the extra slots are only spent on
+        # the obscure books that actually need the title/subtitle variants.
+        for query in queries[:6]:
             logger.info(
                 "prowlarr_search",
                 query=query,
@@ -425,6 +427,12 @@ class ProwlarrSource(ReleaseSource):
         if any segment exactly equals the expected title. This prevents false
         positives like "You Like It Darker" matching "It" or "Dune Messiah"
         matching "Dune".
+
+        A colon is treated as a title/subtitle separator, so a release named
+        "Title: Subtitle" still matches a stored title of just "Title" (some
+        metadata providers drop the subtitle from the stored title). The colon
+        must be present in the release for this to apply, so "Dune" still will
+        not match a subtitle-less "Dune Messiah".
         """
         # Split on common release title delimiters
         segments = re.split(r'\s+-\s+|\s+by\s+', normalized_release)
@@ -437,6 +445,10 @@ class ProwlarrSource(ReleaseSource):
             # Exact segment match (after normalize_title already stripped
             # format tags, brackets, years, etc.)
             if segment == normalized_expected:
+                return True
+
+            # "Title: Subtitle" release vs a stored title of just "Title"
+            if ":" in segment and segment.split(":", 1)[0].strip() == normalized_expected:
                 return True
 
         return False

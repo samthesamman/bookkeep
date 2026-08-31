@@ -347,7 +347,8 @@ def build_search_queries(
     Examples:
         >>> build_search_queries("The Great Book: A Subtitle", "John Doe", "1234567890")
         ['1234567890', 'The Great Book: A Subtitle John Doe', 'The Great Book: A Subtitle',
-         'The Great Book John Doe', 'The Great Book', 'Great Book: A Subtitle', ...]
+         'The Great Book John Doe', 'The Great Book', 'A Subtitle John Doe', 'A Subtitle',
+         'Subtitle John Doe', 'Subtitle', 'Great Book: A Subtitle']
     """
     queries = []
     seen = set()  # Track unique queries to avoid duplicates
@@ -384,11 +385,6 @@ def build_search_queries(
 
     # Title variants (if enabled)
     if include_variants and title:
-        # Remove "The", "A", "An" from beginning
-        title_no_article = re.sub(r"^(The|A|An)\s+", "", title, flags=re.IGNORECASE)
-        if title_no_article != title:
-            add_query(title_no_article)
-
         # Split by colon or dash to get parts
         # "Mistborn: The Final Empire" -> ["Mistborn", "The Final Empire"]
         title_parts = re.split(r"\s*[:\-–]\s*", title)
@@ -400,11 +396,19 @@ def build_search_queries(
             subtitle = title_parts[1].strip()
 
             # Try subtitle + author first - releases often use just the book name
-            # e.g., "The Final Empire Brandon Sanderson"
+            # e.g., "The Final Empire Brandon Sanderson". Keep this ahead of the
+            # lower-value bare-title variants so the query cap doesn't drop it.
             if subtitle and author:
                 add_query(f"{subtitle} {author}")
             if subtitle:
                 add_query(subtitle)
+
+            # Try main part (series name) + author
+            # e.g., "Mistborn Brandon Sanderson"
+            if main_part and main_part != title:
+                if author:
+                    add_query(f"{main_part} {author}")
+                add_query(main_part)
 
             # Try subtitle without article
             subtitle_no_article = re.sub(r"^(The|A|An)\s+", "", subtitle, flags=re.IGNORECASE)
@@ -413,12 +417,10 @@ def build_search_queries(
                     add_query(f"{subtitle_no_article} {author}")
                 add_query(subtitle_no_article)
 
-            # Try main part (series name) + author
-            # e.g., "Mistborn Brandon Sanderson"
-            if main_part and main_part != title:
-                if author:
-                    add_query(f"{main_part} {author}")
-                add_query(main_part)
+        # Remove "The", "A", "An" from beginning
+        title_no_article = re.sub(r"^(The|A|An)\s+", "", title, flags=re.IGNORECASE)
+        if title_no_article != title:
+            add_query(title_no_article)
 
     return queries
 
