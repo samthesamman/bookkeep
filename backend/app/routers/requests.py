@@ -1071,7 +1071,10 @@ async def create_request_hardlink(
 
     orchestrator = DownloadOrchestrator(db_session=db)
     try:
-        dest_path = orchestrator._copy_to_destination(task, source_path, db)
+        # This endpoint runs its own Audiobookshelf scan + match below.
+        dest_path = orchestrator._copy_to_destination(
+            task, source_path, db, notify_audiobookshelf=False
+        )
     except Exception as e:  # pragma: no cover - defensive
         logger.error("request_create_hardlink_error", request_id=request_id, error=str(e))
         raise HTTPException(

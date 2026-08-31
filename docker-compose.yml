@@ -26,7 +26,6 @@ services:
     #   # Adjust the left side (host path) to match your download client's output directory.
     #   - /path/to/downloads:/downloads
     #   # Example: separate mounts for different media types
-      - cifs-cloud-audiobooks:/data/torrents/audiobooks/managed/
       - cifs-cloud-calibre-dbs:/calibre
       - cifs-cloud-data:/data
     ports:
@@ -84,16 +83,6 @@ services:
 volumes:
   postgres_data:
   redis_data:
-  cifs-cloud-books:
-    driver_opts:
-      type: "cifs"
-      o: "username=${SMB_USER},password=${SMB_PASSWORD},uid=1031,gid=65538,vers=3.0"
-      device: //10.102.1.11/data/torrents/books/unmanaged/
-  cifs-cloud-audiobooks:
-    driver_opts:
-      type: "cifs"
-      o: "username=${SMB_USER},password=${SMB_PASSWORD},uid=1031,gid=65538,vers=3.0"
-      device: //10.102.1.11/data/torrents/audiobooks/managed/
   cifs-cloud-calibre-dbs:
     driver_opts:
       type: "cifs"

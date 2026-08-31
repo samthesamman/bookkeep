@@ -468,7 +468,13 @@ class DownloadOrchestrator:
 
             db.close()
 
-    def _copy_to_destination(self, task: DownloadTask, source_path: str, db: Session) -> Optional[str]:
+    def _copy_to_destination(
+        self,
+        task: DownloadTask,
+        source_path: str,
+        db: Session,
+        notify_audiobookshelf: bool = True,
+    ) -> Optional[str]:
         """
         Post-process a completed download.
 
@@ -542,7 +548,8 @@ class DownloadOrchestrator:
                 return None
 
             return self._import_audiobook(
-                task, source, dest_base, db, self._use_hardlinks(task, db)
+                task, source, dest_base, db, self._use_hardlinks(task, db),
+                notify_audiobookshelf=notify_audiobookshelf,
             )
 
         except Exception as e:
@@ -580,6 +587,7 @@ class DownloadOrchestrator:
         dest_base: str,
         db: Session,
         use_hardlinks: bool,
+        notify_audiobookshelf: bool = True,
     ) -> Optional[str]:
         """Lay an audiobook download out Audiobookshelf-style under ``dest_base``:
 
@@ -677,7 +685,72 @@ class DownloadOrchestrator:
             task, db,
             message=f'Imported {imported} audio file(s) to: {book_dir.name}',
         )
+
+        # Ask Audiobookshelf to rescan so the new files show up, then match/link
+        # the ingested item. Best effort — mirrors the manual hardlink endpoint.
+        # Skipped when the caller runs its own Audiobookshelf notify.
+        if notify_audiobookshelf:
+            self._notify_audiobookshelf(book.id, db)
+
         return str(book_dir)
+
+    def _notify_audiobookshelf(self, book_id: int, db: Session) -> None:
+        """After an audiobook import, trigger an Audiobookshelf scan and then
+        match/link the new library item.
+
+        The scan trigger, the baseline capture and the follow-up match are all
+        async and the match polls with sleeps, so the whole sequence runs on a
+        daemon thread — the download thread is never blocked. No-ops when no
+        Audiobookshelf server is configured.
+        """
+        try:
+            from ..routers.audiobookshelf import get_default_audiobookshelf_server
+            if get_default_audiobookshelf_server(db) is None:
+                return
+        except Exception as e:  # pragma: no cover - defensive
+            logger.warning(
+                "orchestrator_abs_notify_setup_failed", book_id=book_id, error=str(e)
+            )
+            return
+
+        def _run() -> None:
+            import asyncio
+            from datetime import datetime, timezone
+            from ..database import SessionLocal
+            from ..routers.audiobookshelf import (
+                get_default_audiobookshelf_server,
+                get_audiobookshelf_max_added_at,
+                trigger_audiobookshelf_scan,
+                link_and_match_new_audiobook,
+            )
+
+            async def _work() -> None:
+                inner_db = SessionLocal()
+                try:
+                    server = get_default_audiobookshelf_server(inner_db)
+                    if server is None:
+                        return
+                    server_id = server.id
+                    baseline_ms = await get_audiobookshelf_max_added_at(server)
+                    if not baseline_ms:
+                        baseline_ms = int(
+                            (datetime.now(timezone.utc).timestamp() - 120) * 1000
+                        )
+                    await trigger_audiobookshelf_scan(server)
+                finally:
+                    inner_db.close()
+                await link_and_match_new_audiobook(server_id, book_id, baseline_ms)
+
+            try:
+                asyncio.run(_work())
+            except Exception as e:  # pragma: no cover - network/defensive
+                logger.warning(
+                    "orchestrator_abs_notify_failed", book_id=book_id, error=str(e)
+                )
+
+        threading.Thread(
+            target=_run, daemon=True, name=f"abs-notify-book-{book_id}"
+        ).start()
 
     def _set_import_result(self, task: DownloadTask, db: Session, message: str) -> None:
         """Record the outcome of a successful copy.

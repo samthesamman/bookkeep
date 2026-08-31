@@ -121,13 +121,13 @@ class ProwlarrSource(ReleaseSource):
             )
 
             # TEMP DEBUG: dump every raw result Prowlarr returned for this query
-            logger.info(
+            logger.debug(
                 "prowlarr_raw_results",
                 query=query,
                 count=len(results),
             )
             for i, result in enumerate(results):
-                logger.info(
+                logger.debug(
                     "prowlarr_raw_result",
                     idx=i,
                     title=result.get("title"),
@@ -214,14 +214,19 @@ class ProwlarrSource(ReleaseSource):
         if not download_url:
             return None
 
-        # Validate author if provided - helps ensure results match the intended book
-        if expected_author and not self._author_matches(title, expected_author):
+        # Author presence in the release title is a soft signal, not a hard
+        # requirement - many audiobook releases don't embed the author name.
+        # Title matching below is the real guard against wrong books.
+        author_in_title = (
+            self._author_matches(title, expected_author)
+            if expected_author else True
+        )
+        if not author_in_title:
             logger.info(
-                "prowlarr_drop_author_mismatch",
+                "prowlarr_author_not_in_title",
                 release_title=title,
-                expected_author=expected_author
+                expected_author=expected_author,
             )
-            return None
 
         # Validate title if provided - prevents grabbing wrong books by same author
         if expected_title and not self._title_matches(title, expected_title):
@@ -271,6 +276,12 @@ class ProwlarrSource(ReleaseSource):
             preferred_format=fmt,
             min_seeders=1
         )
+
+        # Prefer releases whose title actually contains the author name, but
+        # don't exclude ones that don't - just rank them lower.
+        if expected_author:
+            quality += 10 if author_in_title else -15
+            quality = max(0.0, min(100.0, quality))
 
         # Create Release object
         release = Release(
