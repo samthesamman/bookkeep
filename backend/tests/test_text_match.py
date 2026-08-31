@@ -1,7 +1,7 @@
 """Tests for app.services.text_match.titles_match."""
 import pytest
 
-from app.services.text_match import titles_match
+from app.services.text_match import is_derivative_title, titles_match
 
 _NO_BAD_PARTS = (
     "No Bad Parts: Healing Trauma and Restoring Wholeness "
@@ -34,3 +34,23 @@ _NO_BAD_PARTS = (
 )
 def test_titles_match(wanted, got, expected):
     assert titles_match(wanted, got) is expected
+
+
+@pytest.mark.parametrize(
+    "wanted, got, expected",
+    [
+        ("Atomic Habits", "Summary of Atomic Habits", True),
+        ("Atomic Habits", "Summary: Atomic Habits by James Clear", True),
+        ("Thinking, Fast and Slow", "Workbook For Thinking, Fast and Slow", True),
+        ("The Body Keeps the Score", "Summary & Analysis of The Body Keeps the Score", True),
+        ("Sapiens", "Blinkist Summary of Sapiens", True),
+        # real book, not a companion work
+        ("Atomic Habits", "Atomic Habits: An Easy & Proven Way to Build Good Habits", False),
+        ("Sapiens", "Sapiens: A Brief History of Humankind", False),
+        # the caller genuinely wants the summary/workbook
+        ("Summary of Atomic Habits", "Summary of Atomic Habits", False),
+        ("The Anxiety and Phobia Workbook", "The Anxiety and Phobia Workbook", False),
+    ],
+)
+def test_is_derivative_title(wanted, got, expected):
+    assert is_derivative_title(wanted, got) is expected

@@ -12,6 +12,7 @@ from sqlalchemy import func, or_
 from app import schemas, cache, database, models
 from app.models import Book, Series
 from app.auth import require_admin
+from app.services.text_match import is_derivative_title
 
 logger = structlog.get_logger()
 
@@ -860,28 +861,58 @@ async def lookup_book_by_title_author(title: str, author: str = None, db: Sessio
         results_obj = search_response.get("results", {}) if isinstance(search_response, dict) else {}
         hits = results_obj.get("hits", []) if isinstance(results_obj, dict) else []
 
-        for hit in hits[:5]:
+        def _doc_authors(doc: dict) -> str:
+            names = list(doc.get("author_names") or [])
+            for contrib in doc.get("contributions") or []:
+                name = (contrib.get("author") or {}).get("name")
+                if name:
+                    names.append(name)
+            return " ".join(names)
+
+        matched_id = None
+        author_mismatch_id = None
+        for hit in hits[:10]:
             doc = hit.get("document", {})
-            if doc and doc.get("id"):
-                # Found a match - now fetch full details
-                book_id = doc.get("id")
-                logger.info("hardcover_search_match_found", 
-                          search=search_query, 
-                          matched_id=book_id, 
-                          matched_title=doc.get("title"))
-                
-                # Fetch full book details using the ID
-                full_query = (
-                    "query GetBook($id: Int!) {\n"
-                    "  books_by_pk(id: $id) {"
-                    + _HC_LOOKUP_BOOK_FIELDS
-                    + "  }\n}"
-                )
-                full_result = await execute_graphql(full_query, {"id": int(book_id)}, db)
-                return full_result.get("books_by_pk")
-        
-        logger.warning("hardcover_search_no_match", search=search_query)
-        return None
+            if not doc or not doc.get("id"):
+                continue
+
+            got_title = doc.get("title") or ""
+            # Never accept a "Summary of…" / "Workbook for…" style companion work
+            # when the caller asked for the original book — this is the main
+            # source of false-positive matches from Hardcover search.
+            if is_derivative_title(title, got_title):
+                logger.info("hardcover_search_skip_derivative",
+                            search=search_query, candidate=got_title)
+                continue
+
+            book_id = int(doc["id"])
+            if author and author.lower() not in _doc_authors(doc).lower():
+                # Wrong author — only fall back to this if nothing better turns up.
+                if author_mismatch_id is None:
+                    author_mismatch_id = book_id
+                continue
+
+            matched_id = book_id
+            logger.info("hardcover_search_match_found",
+                        search=search_query,
+                        matched_id=book_id,
+                        matched_title=got_title)
+            break
+
+        matched_id = matched_id or author_mismatch_id
+        if matched_id is None:
+            logger.warning("hardcover_search_no_match", search=search_query)
+            return None
+
+        # Fetch full book details using the ID
+        full_query = (
+            "query GetBook($id: Int!) {\n"
+            "  books_by_pk(id: $id) {"
+            + _HC_LOOKUP_BOOK_FIELDS
+            + "  }\n}"
+        )
+        full_result = await execute_graphql(full_query, {"id": matched_id}, db)
+        return full_result.get("books_by_pk")
     except Exception as e:
         logger.error("hardcover_search_error", search=search_query, error=str(e))
         return None

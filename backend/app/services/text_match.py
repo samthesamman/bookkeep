@@ -22,6 +22,30 @@ def _main(text: str) -> set[str]:
     return tokens((text or "").split(":", 1)[0])
 
 
+# Third-party "companion" works that Hardcover indexes alongside the real book:
+# "Summary of Atomic Habits", "Workbook for Thinking Fast and Slow", etc. Matching
+# one of these to a request for the original is a false positive.
+_DERIVATIVE_MARKERS = re.compile(
+    r"\b("
+    r"summary|summaries|abridged|abridgement|"
+    r"workbook|study guide|study-guide|reading guide|discussion guide|"
+    r"key takeaways|key insights|key points|key ideas|"
+    r"conversation starters|companion|sidekick|quick ?read|quicklet|"
+    r"instaread|blinkist|cliffs?notes|sparknotes|getflashnotes|sumoreads|"
+    r"trivia (?:on|for)|book review"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def is_derivative_title(wanted: str, got: str) -> bool:
+    """True when ``got`` looks like a summary / workbook / study guide of another
+    book while ``wanted`` does not — matching the two would be a false positive."""
+    if not _DERIVATIVE_MARKERS.search(got or ""):
+        return False
+    return not _DERIVATIVE_MARKERS.search(wanted or "")
+
+
 def titles_match(wanted: str, got: str) -> bool:
     tw, tg = tokens(wanted), tokens(got)
     if not tw or not tg:
