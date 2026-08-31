@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from app.database import get_db
 from app.models import User
 from app.auth import verify_password
+from app.rate_limit import login_limiter, login_rate_limit
 from app.jwt import (
     create_tokens,
     verify_refresh_token,
@@ -36,7 +37,11 @@ class AccessTokenResponse(BaseModel):
 
 
 @router.post("/login", response_model=TokenResponse)
-def login(request: LoginRequest, db: Session = Depends(get_db)):
+def login(
+    request: LoginRequest,
+    db: Session = Depends(get_db),
+    client_ip: str = Depends(login_rate_limit),
+):
     """Authenticate user and return JWT tokens."""
     # Find user by username
     user = db.query(User).filter(User.username == request.username).first()
@@ -71,6 +76,9 @@ def login(request: LoginRequest, db: Session = Depends(get_db)):
         )
 
     logger.info("login_success", user_id=user.id, username=user.username, is_admin=user.is_admin)
+
+    # Successful auth: clear this IP's failed-attempt budget.
+    login_limiter.reset(f"login:{client_ip}")
 
     # Create and return JWT tokens
     return create_tokens(

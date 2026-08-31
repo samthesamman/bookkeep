@@ -173,6 +173,7 @@ if enable_debug_routes:
 
 # Serve static files (frontend build)
 static_dir = os.path.join(os.path.dirname(__file__), "..", "frontend_dist")
+static_root = os.path.realpath(static_dir)
 if os.path.exists(static_dir):
     # Mount static files for assets (JS, CSS, images, etc.)
     assets_dir = os.path.join(static_dir, "assets")
@@ -186,21 +187,19 @@ if os.path.exists(static_dir):
         # Skip API routes and health check (these are handled by routes above)
         if full_path.startswith("api/") or full_path == "health":
             raise HTTPException(status_code=404, detail="Not Found")
-        
+
         # Check if it's a static file that exists (like favicon.ico, robots.txt, etc.)
-        file_full_path = os.path.join(static_dir, full_path)
-        if os.path.isfile(file_full_path):
-            # Security check: ensure the file is within static_dir
-            try:
-                if os.path.commonpath([static_dir, file_full_path]) == static_dir:
-                    return FileResponse(file_full_path)
-            except ValueError:
-                # Paths don't share a common base, reject
-                pass
-        
+        # Resolve symlinks and ".." *before* the containment check: a lexical
+        # comparison (os.path.commonpath) does not collapse "..", so a request
+        # like /..%2f..%2f..%2fetc/passwd would otherwise escape static_root.
+        candidate = os.path.realpath(os.path.join(static_root, full_path))
+        if (candidate == static_root or candidate.startswith(static_root + os.sep)) \
+                and os.path.isfile(candidate):
+            return FileResponse(candidate)
+
         # For all SPA routes (like /series, /book/123, etc.), serve index.html
-        index_path = os.path.join(static_dir, "index.html")
-        if os.path.exists(index_path):
+        index_path = os.path.join(static_root, "index.html")
+        if os.path.isfile(index_path):
             return FileResponse(index_path)
-        
+
         raise HTTPException(status_code=404, detail="Not Found")
