@@ -42,6 +42,18 @@ FORMAT_PATTERNS = {
 # Audiobook-specific formats (prioritize these)
 AUDIOBOOK_FORMATS = {"m4b", "mp3", "m4a", "aac", "flac", "ogg", "opus"}
 
+# Preference bonus between audiobook containers. m4b is a single file with
+# embedded chapters/bookmarks, so it is preferred over loose mp3 tracks.
+AUDIOBOOK_FORMAT_BONUS = {
+    "m4b": 15,
+    "m4a": 8,
+    "aac": 8,
+    "flac": 5,
+    "ogg": 3,
+    "opus": 3,
+    "mp3": 0,
+}
+
 # Ebook-specific formats
 EBOOK_FORMATS = {"epub", "mobi", "azw", "azw3", "pdf", "lit", "pdb", "fb2", "djvu", "cbr", "cbz", "kepub", "ibooks"}
 
@@ -335,7 +347,7 @@ def build_search_queries(
     Examples:
         >>> build_search_queries("The Great Book: A Subtitle", "John Doe", "1234567890")
         ['1234567890', 'The Great Book: A Subtitle John Doe', 'The Great Book: A Subtitle',
-         'Great Book: A Subtitle', 'The Great Book John Doe', 'The Great Book']
+         'The Great Book John Doe', 'The Great Book', 'Great Book: A Subtitle', ...]
     """
     queries = []
     seen = set()  # Track unique queries to avoid duplicates
@@ -358,6 +370,17 @@ def build_search_queries(
     # Just title (full)
     if title:
         add_query(title)
+
+    # Title up to (but not including) the first colon.
+    # Some metadata providers store the title as "Title: Subtitle", but
+    # release names usually carry only the main title. Try this early so it
+    # is not crowded out by the query cap the caller applies.
+    if include_variants and title and ":" in title:
+        title_before_colon = title.split(":", 1)[0].strip()
+        if title_before_colon and title_before_colon != title:
+            if author:
+                add_query(f"{title_before_colon} {author}")
+            add_query(title_before_colon)
 
     # Title variants (if enabled)
     if include_variants and title:
@@ -408,7 +431,9 @@ def calculate_quality_score(
     """
     Calculate quality score for a release (0-100).
 
-    Higher score = better quality.
+    Higher score = better quality. For audiobooks, the container format also
+    matters: m4b (single file, chapters, bookmarks) is scored above mp3 via
+    AUDIOBOOK_FORMAT_BONUS.
 
     Args:
         result: Parsed Prowlarr result
@@ -425,6 +450,11 @@ def calculate_quality_score(
         fmt = extract_format(result.get("title", ""))
         if fmt == preferred_format:
             score += 20
+
+    # Audiobook container preference: rank m4b above mp3, etc.
+    if is_audiobook(result.get("title", "")):
+        audio_fmt = extract_format(result.get("title", ""))
+        score += AUDIOBOOK_FORMAT_BONUS.get(audio_fmt, 0)
 
     # Seeder count (0 to +15 points)
     seeders = result.get("seeders", 0)

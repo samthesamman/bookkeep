@@ -212,6 +212,23 @@ class TestBuildSearchQueries:
         queries = build_search_queries(title="Book - A Story", include_variants=True)
         assert "Book" in queries
 
+    def test_title_before_colon_variant(self):
+        queries = build_search_queries(
+            title="The Great Book: A Subtitle",
+            author="John Doe",
+        )
+        # Bare main title (before the colon), with and without author
+        assert "The Great Book" in queries
+        assert "The Great Book John Doe" in queries
+        # It should land within the first few queries so the caller's cap
+        # does not drop it
+        assert queries.index("The Great Book John Doe") < 4
+
+    def test_title_before_colon_variant_no_colon(self):
+        queries = build_search_queries(title="Plain Title", author="John Doe")
+        # Nothing new added when there is no colon
+        assert queries == ["Plain Title John Doe", "Plain Title"]
+
     def test_without_variants(self):
         queries = build_search_queries(
             title="The Book: A Story",
@@ -266,7 +283,18 @@ class TestCalculateQualityScore:
         # Good size for audiobook (100 MB)
         result = {"title": "Book.m4b", "size_bytes": 100 * 1024 * 1024}
         score = calculate_quality_score(result)
-        assert score == 60.0  # Base (50) + size bonus (10)
+        # Base (50) + size bonus (10) + m4b container bonus (15)
+        assert score == 75.0
+
+    def test_audiobook_prefers_m4b_over_mp3(self):
+        m4b = calculate_quality_score({"title": "Some Book Unabridged.m4b", "seeders": 5})
+        mp3 = calculate_quality_score({"title": "Some Book Unabridged.mp3", "seeders": 5})
+        assert m4b > mp3
+        assert m4b - mp3 == 15
+
+    def test_ebook_gets_no_container_bonus(self):
+        score = calculate_quality_score({"title": "Some Book.epub"})
+        assert score == 50.0
 
     def test_size_penalty_too_small(self):
         # Ebook too small (50 KB)

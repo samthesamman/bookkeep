@@ -617,6 +617,12 @@ async def import_download(
             # Keep the task in history instead of deleting
             db.commit()
 
+            # Promote the request and email the user now. Audiobooks already do
+            # this from their own post-import follow-up; here it covers ebooks
+            # that are imported (Calibre-gated ones wait for reconcile).
+            if task.format == "ebook" and task.import_status == "imported":
+                orchestrator._send_availability_email(task.book_id)
+
             # Extract filename from path
             import os
             filename = os.path.basename(dest_path)

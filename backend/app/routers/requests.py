@@ -987,6 +987,11 @@ async def update_processing_requests_status(db: Session) -> None:
             logger.info("processing_requests_updated",
                        updated_count=updated_count,
                        total_checked=len(processing_requests))
+            # The book-details request cache (5 min TTL) would otherwise keep
+            # showing the old status — and the "cancel my request" button — until
+            # it expires. Drop it now that a status actually changed.
+            await clear_cache_pattern("requests_by_hardcover:*")
+            await clear_cache_pattern("requests_by_hardcover_batch:*")
         else:
             logger.info("no_requests_updated",
                        total_checked=len(processing_requests))
@@ -1137,6 +1142,11 @@ async def create_request_hardlink(
         logger.warning(
             "request_create_hardlink_abs_scan_failed", request_id=request_id, error=str(e)
         )
+
+    # Promote any waiting request and email the user now (runs after the match
+    # task above, since background tasks execute in order).
+    from app.tasks import promote_and_email
+    background_tasks.add_task(promote_and_email)
 
     if scan_requested:
         abs_note = " — Audiobookshelf scan started; metadata match will follow"

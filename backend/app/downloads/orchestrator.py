@@ -429,6 +429,13 @@ class DownloadOrchestrator:
                 if dest_path:
                     self._update_book_availability(task, db)
 
+                    # Audiobook imports run their own follow-up (Audiobookshelf
+                    # match + email) from _import_audiobook. For an ebook that is
+                    # already imported (no Calibre wait), promote + email now;
+                    # Calibre-gated ebooks are handled by reconcile_calibre_library.
+                    if task.format == "ebook" and task.import_status == "imported":
+                        self._send_availability_email(task.book_id)
+
                 logger.info(
                     "orchestrator_download_complete",
                     task_id=task_id,
@@ -686,70 +693,94 @@ class DownloadOrchestrator:
             message=f'Imported {imported} audio file(s) to: {book_dir.name}',
         )
 
-        # Ask Audiobookshelf to rescan so the new files show up, then match/link
-        # the ingested item. Best effort — mirrors the manual hardlink endpoint.
-        # Skipped when the caller runs its own Audiobookshelf notify.
+        # Follow-up runs on a daemon thread so the download thread isn't blocked:
+        # Audiobookshelf rescan + match/link the ingested item, then promote the
+        # request and send its availability email. Skipped when the caller runs
+        # its own Audiobookshelf notify (it emails afterwards too).
         if notify_audiobookshelf:
-            self._notify_audiobookshelf(book.id, db)
+            self._after_audiobook_import(book.id, db)
 
         return str(book_dir)
 
-    def _notify_audiobookshelf(self, book_id: int, db: Session) -> None:
-        """After an audiobook import, trigger an Audiobookshelf scan and then
-        match/link the new library item.
+    def _after_audiobook_import(self, book_id: int, db: Session) -> None:
+        """Background follow-up after an audiobook import.
 
-        The scan trigger, the baseline capture and the follow-up match are all
-        async and the match polls with sleeps, so the whole sequence runs on a
-        daemon thread — the download thread is never blocked. No-ops when no
-        Audiobookshelf server is configured.
+        1. If an Audiobookshelf server is configured: trigger a rescan, then
+           poll/match the newly ingested item and link it to the book.
+        2. Promote the matching request to ``available`` and email the user now,
+           rather than waiting for the periodic jobs.
+
+        Runs on a daemon thread — the Audiobookshelf match polls with sleeps —
+        so the download thread returns immediately.
         """
         try:
             from ..routers.audiobookshelf import get_default_audiobookshelf_server
-            if get_default_audiobookshelf_server(db) is None:
-                return
+            abs_configured = get_default_audiobookshelf_server(db) is not None
         except Exception as e:  # pragma: no cover - defensive
             logger.warning(
                 "orchestrator_abs_notify_setup_failed", book_id=book_id, error=str(e)
             )
-            return
+            abs_configured = False
 
         def _run() -> None:
             import asyncio
             from datetime import datetime, timezone
             from ..database import SessionLocal
-            from ..routers.audiobookshelf import (
-                get_default_audiobookshelf_server,
-                get_audiobookshelf_max_added_at,
-                trigger_audiobookshelf_scan,
-                link_and_match_new_audiobook,
-            )
 
             async def _work() -> None:
-                inner_db = SessionLocal()
-                try:
-                    server = get_default_audiobookshelf_server(inner_db)
-                    if server is None:
-                        return
-                    server_id = server.id
-                    baseline_ms = await get_audiobookshelf_max_added_at(server)
-                    if not baseline_ms:
-                        baseline_ms = int(
-                            (datetime.now(timezone.utc).timestamp() - 120) * 1000
-                        )
-                    await trigger_audiobookshelf_scan(server)
-                finally:
-                    inner_db.close()
-                await link_and_match_new_audiobook(server_id, book_id, baseline_ms)
+                if abs_configured:
+                    from ..routers.audiobookshelf import (
+                        get_default_audiobookshelf_server,
+                        get_audiobookshelf_max_added_at,
+                        trigger_audiobookshelf_scan,
+                        link_and_match_new_audiobook,
+                    )
+                    inner_db = SessionLocal()
+                    try:
+                        server = get_default_audiobookshelf_server(inner_db)
+                        server_id = server.id if server else None
+                        if server is not None:
+                            baseline_ms = await get_audiobookshelf_max_added_at(server)
+                            if not baseline_ms:
+                                baseline_ms = int(
+                                    (datetime.now(timezone.utc).timestamp() - 120) * 1000
+                                )
+                            await trigger_audiobookshelf_scan(server)
+                    finally:
+                        inner_db.close()
+                    if server_id is not None:
+                        await link_and_match_new_audiobook(server_id, book_id, baseline_ms)
+
+                from ..tasks import promote_and_email
+                await promote_and_email()
 
             try:
                 asyncio.run(_work())
             except Exception as e:  # pragma: no cover - network/defensive
                 logger.warning(
-                    "orchestrator_abs_notify_failed", book_id=book_id, error=str(e)
+                    "orchestrator_after_audiobook_import_failed",
+                    book_id=book_id, error=str(e),
                 )
 
         threading.Thread(
-            target=_run, daemon=True, name=f"abs-notify-book-{book_id}"
+            target=_run, daemon=True, name=f"after-audiobook-import-{book_id}"
+        ).start()
+
+    def _send_availability_email(self, book_id: Optional[int]) -> None:
+        """Promote a freshly-imported request and email the user now, on a daemon
+        thread. Idempotent — safe alongside the periodic jobs."""
+        def _run() -> None:
+            import asyncio
+            try:
+                from ..tasks import promote_and_email
+                asyncio.run(promote_and_email())
+            except Exception as e:  # pragma: no cover - defensive
+                logger.warning(
+                    "orchestrator_availability_email_failed", book_id=book_id, error=str(e)
+                )
+
+        threading.Thread(
+            target=_run, daemon=True, name=f"availability-email-{book_id}"
         ).start()
 
     def _set_import_result(self, task: DownloadTask, db: Session, message: str) -> None:

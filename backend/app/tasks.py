@@ -496,6 +496,7 @@ async def check_processing_requests():
             db.rollback()
         await _refresh_downloaded_books(db, promoted)
         await update_processing_requests_status(db)
+        await send_availability_emails()
     except Exception as e:
         logger.error("check_processing_requests_error", error=str(e))
     finally:
@@ -608,6 +609,16 @@ async def reconcile_calibre_library():
             logger.info("reconcile_calibre_library_complete", updated=updated, checked=len(reqs))
 
         await _refresh_downloaded_books(db, promoted)
+
+        # An ebook that just landed in the library may have a waiting request —
+        # email it now, and drop the request cache so the book page stops showing
+        # the stale status (and "cancel my request" button), rather than waiting
+        # for the next periodic run / the 5 min cache TTL.
+        if updated or promoted:
+            from app.cache import clear_cache_pattern
+            await clear_cache_pattern("requests_by_hardcover:*")
+            await clear_cache_pattern("requests_by_hardcover_batch:*")
+            await send_availability_emails()
     except Exception as e:
         logger.error("reconcile_calibre_library_error", error=str(e))
         db.rollback()
@@ -966,6 +977,31 @@ async def send_availability_emails():
         db.rollback()
     finally:
         db.close()
+
+
+async def promote_and_email() -> None:
+    """Promote freshly-completed requests to ``available`` and send their
+    availability emails right now, instead of waiting for the periodic jobs.
+
+    Both steps are idempotent and self-selecting (they scan for work and no-op
+    when there is none), so this is safe to call after any download finishes and
+    is purely additive to ``check_processing_requests`` / ``send_availability_emails``.
+    """
+    from app.routers.requests import update_processing_requests_status
+
+    db: Session = SessionLocal()
+    try:
+        await update_processing_requests_status(db)
+    except Exception as e:
+        logger.error("promote_and_email_promote_error", error=str(e))
+        db.rollback()
+    finally:
+        db.close()
+
+    try:
+        await send_availability_emails()
+    except Exception as e:
+        logger.error("promote_and_email_send_error", error=str(e))
 
 
 def _parse_booklore_instant(value: Any) -> Optional[datetime]:
@@ -1701,6 +1737,11 @@ async def sync_from_audiobookshelf():
                              title=title,
                              error=str(commit_error))
                 db.rollback()
+
+        if updated_count or books_created or books_updated:
+            from app.cache import clear_cache_pattern
+            await clear_cache_pattern("requests_by_hardcover:*")
+            await clear_cache_pattern("requests_by_hardcover_batch:*")
 
         logger.info("sync_from_audiobookshelf_complete",
                    audiobookshelf_items=len(items),
