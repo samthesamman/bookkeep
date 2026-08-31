@@ -91,6 +91,7 @@ interface BookloreServerForm {
 interface AudiobookshelfServerForm {
   name: string;
   url: string;
+  external_url: string;
   api_key: string;
   is_default: boolean;
   library_id: string | null;
@@ -829,6 +830,7 @@ export default function Settings() {
   const [audiobookshelfForm, setAudiobookshelfForm] = useState<AudiobookshelfServerForm>({
     name: '',
     url: '',
+    external_url: '',
     api_key: '',
     is_default: false,
     library_id: null,
@@ -1326,6 +1328,7 @@ export default function Settings() {
     setAudiobookshelfForm({
       name: '',
       url: '',
+      external_url: '',
       api_key: '',
       is_default: false,
       library_id: null,
@@ -1346,6 +1349,7 @@ export default function Settings() {
     setAudiobookshelfForm({
       name: server.name,
       url: server.url,
+      external_url: server.external_url ?? '',
       api_key: '', // Don't populate for security
       is_default: server.is_default,
       library_id: server.library_id,
@@ -2096,6 +2100,20 @@ export default function Settings() {
                     placeholder="https://audiobookshelf.example.com"
                     className="bg-secondary border-border"
                   />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="abs-external-url" className="text-foreground">External Domain URL</Label>
+                  <Input
+                    id="abs-external-url"
+                    value={audiobookshelfForm.external_url}
+                    onChange={(e) => setAudiobookshelfForm({ ...audiobookshelfForm, external_url: e.target.value })}
+                    placeholder="https://listen.example.com"
+                    className="bg-secondary border-border"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Public URL used for "Listen Now" links on book pages. Leave blank to use the URL above.
+                  </p>
                 </div>
 
                 <div className="space-y-2">

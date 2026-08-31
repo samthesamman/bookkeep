@@ -361,6 +361,7 @@ export interface LocalBook {
   genres: string[] | null;
   ebook_available: boolean;
   audiobook_available: boolean;
+  audiobookshelf_id: string | null;
   metadata_locked: boolean;
 }
 
@@ -928,6 +929,7 @@ export interface AudiobookshelfServer {
   id: number;
   name: string;
   url: string;
+  external_url: string | null;
   is_default: boolean;
   library_id: string | null;
   created_at: string;
@@ -974,17 +976,20 @@ export const audiobookshelfApi = {
   getById: (id: number) =>
     apiRequest<AudiobookshelfServer>(`/api/audiobookshelf/${id}`),
 
-  create: (server: { name: string; url: string; api_key: string; is_default?: boolean; library_id?: string | null }) =>
+  create: (server: { name: string; url: string; external_url?: string | null; api_key: string; is_default?: boolean; library_id?: string | null }) =>
     apiRequest<AudiobookshelfServer>('/api/audiobookshelf/', {
       method: 'POST',
       body: JSON.stringify(server),
     }),
 
-  update: (id: number, server: { name?: string; url?: string; api_key?: string; is_default?: boolean; library_id?: string | null }) =>
+  update: (id: number, server: { name?: string; url?: string; external_url?: string | null; api_key?: string; is_default?: boolean; library_id?: string | null }) =>
     apiRequest<AudiobookshelfServer>(`/api/audiobookshelf/${id}`, {
       method: 'PUT',
       body: JSON.stringify(server),
     }),
+
+  getWebUrl: () =>
+    apiRequest<{ url: string | null }>('/api/audiobookshelf/web-url'),
 
   delete: (id: number) =>
     apiRequest<void>(`/api/audiobookshelf/${id}`, {

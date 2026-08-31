@@ -186,6 +186,9 @@ class AudiobookshelfServer(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, nullable=False)
     url = Column(String, nullable=False)  # Full URL like https://abs.example.com
+    # Public/external URL used for user-facing "Listen Now" deep links.
+    # Falls back to `url` when not set.
+    external_url = Column(String, nullable=True)
     api_key = Column(String, nullable=False)
     is_default = Column(Boolean, default=False)
     library_id = Column(String, nullable=True)  # ABS library UUID; null = scan all libraries

@@ -48,6 +48,15 @@ def get_default_audiobookshelf_server(db: Session) -> Optional[models.Audiobooks
     return server
 
 
+def get_audiobookshelf_web_url(server: models.AudiobookshelfServer) -> str:
+    """Base URL for user-facing links into the Audiobookshelf web app.
+
+    Prefers the configured External Domain URL, falling back to the API URL.
+    """
+    base = (server.external_url or "").strip() or server.url
+    return base.rstrip("/")
+
+
 def _auth_headers(server: models.AudiobookshelfServer) -> Dict[str, str]:
     """Build authorization headers for Audiobookshelf API"""
     return {"Authorization": f"Bearer {server.api_key}"}
@@ -497,6 +506,20 @@ def _match_local_book(entry: Dict[str, Any], db: Session) -> Optional[models.Boo
 
 # NOTE: keep the /library/* routes above the /{server_id} routes so
 # "library" isn't parsed as a server id.
+@router.get("/web-url")
+async def get_web_url(
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    """Base URL for deep-linking into the Audiobookshelf web app.
+
+    Any signed-in user; used to build "Listen Now" links on book pages.
+    Returns the configured External Domain URL, or the API URL as a fallback.
+    """
+    server = get_default_audiobookshelf_server(db)
+    return {"url": get_audiobookshelf_web_url(server) if server else None}
+
+
 @router.get("/library/items")
 async def list_library_items(
     db: Session = Depends(database.get_db),
@@ -750,6 +773,7 @@ async def create_server(
     db_server = models.AudiobookshelfServer(
         name=server.name,
         url=server.url,
+        external_url=server.external_url,
         api_key=server.api_key,
         is_default=server.is_default,
         library_id=server.library_id,

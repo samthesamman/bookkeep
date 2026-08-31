@@ -101,6 +101,7 @@ class BookResponse(BookBase):
     id: int
     ebook_available: bool = False
     audiobook_available: bool = False
+    audiobookshelf_id: Optional[str] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
 
@@ -529,6 +530,7 @@ class BookloreTestConnectionResponse(BaseModel):
 class AudiobookshelfServerBase(BaseModel):
     name: str
     url: str  # Full URL like https://abs.example.com
+    external_url: Optional[str] = None  # Public URL for user-facing "Listen Now" links; falls back to url
     is_default: bool = False
     library_id: Optional[str] = None  # ABS library UUID; null = scan all libraries
 
@@ -539,12 +541,22 @@ class AudiobookshelfServerBase(BaseModel):
             raise ValueError('URL must start with http:// or https://')
         return v.rstrip('/')
 
+    @field_validator('external_url')
+    @classmethod
+    def validate_external_url(cls, v):
+        if v is None or not v.strip():
+            return None
+        if not v.startswith(('http://', 'https://')):
+            raise ValueError('External Domain URL must start with http:// or https://')
+        return v.rstrip('/')
+
 class AudiobookshelfServerCreate(AudiobookshelfServerBase):
     api_key: str
 
 class AudiobookshelfServerUpdate(BaseModel):
     name: Optional[str] = None
     url: Optional[str] = None
+    external_url: Optional[str] = None
     api_key: Optional[str] = None
     is_default: Optional[bool] = None
     library_id: Optional[str] = None
@@ -555,6 +567,15 @@ class AudiobookshelfServerUpdate(BaseModel):
         if v is not None and not v.startswith(('http://', 'https://')):
             raise ValueError('URL must start with http:// or https://')
         return v.rstrip('/') if v else v
+
+    @field_validator('external_url')
+    @classmethod
+    def validate_external_url(cls, v):
+        if v is None or not v.strip():
+            return None
+        if not v.startswith(('http://', 'https://')):
+            raise ValueError('External Domain URL must start with http:// or https://')
+        return v.rstrip('/')
 
 class AudiobookshelfServerResponse(AudiobookshelfServerBase):
     """Response schema — intentionally excludes api_key for security"""

@@ -9,7 +9,7 @@ import { RequestDialog } from '@/components/books/RequestDialog';
 import { SearchReleaseDialog } from '@/components/books/SearchReleaseDialog';
 import { BookCard } from '@/components/books/BookCard';
 import { useBookDetails, useBookPrompts } from '@/hooks/useHardcoverBooks';
-import { requestsApi, booksApi, directDownloadApi, calibreApi } from '@/lib/api';
+import { requestsApi, booksApi, directDownloadApi, calibreApi, audiobookshelfApi } from '@/lib/api';
 import { transformHardcoverBook } from '@/lib/hardcover';
 import { CalibreFormatActions } from '@/components/books/CalibreFormatActions';
 import { CalibreRelinkDialog } from '@/components/books/CalibreRelinkDialog';
@@ -99,6 +99,18 @@ export default function BookDetails() {
     calibre?.format_details.filter((f) => calibre.ebook_formats.includes(f.format)) ?? [];
   const calibreAudioFormats =
     calibre?.format_details.filter((f) => calibre.audiobook_formats.includes(f.format)) ?? [];
+
+  // Deep link into Audiobookshelf for a book that's linked to an ABS item.
+  const { data: absWebUrl } = useQuery({
+    queryKey: ['audiobookshelf', 'web-url'],
+    queryFn: () => audiobookshelfApi.getWebUrl(),
+    enabled: !!dbBook?.audiobookshelf_id,
+    staleTime: 5 * 60 * 1000,
+  });
+  const listenNowUrl =
+    dbBook?.audiobookshelf_id && absWebUrl?.url
+      ? `${absWebUrl.url.replace(/\/$/, '')}/item/${dbBook.audiobookshelf_id}`
+      : null;
 
   // For a linked book, the Calibre overlay (Calibre's own metadata merged with
   // the curated Book row) is exactly what "My Books" shows — use it here too.
@@ -584,6 +596,29 @@ export default function BookDetails() {
                       heading={calibreEbookFormats.length > 0 ? 'Audiobook' : null}
                     />
                   )}
+                </div>
+              )}
+
+              {/* Listen on Audiobookshelf — deep link for a linked ABS item */}
+              {listenNowUrl && (
+                <div className="rounded-2xl border border-border/50 bg-card/30 p-5 text-left space-y-3">
+                  <div className="flex items-center gap-2">
+                    <Headphones className="h-4 w-4 text-violet-400" />
+                    <h2 className="text-sm font-semibold text-foreground">
+                      {calibre && (calibreEbookFormats.length > 0 || calibreAudioFormats.length > 0)
+                        ? 'Listen on Audiobookshelf'
+                        : 'In your library'}
+                    </h2>
+                  </div>
+                  <Button
+                    asChild
+                    className="h-11 px-5 rounded-xl bg-violet-600 hover:bg-violet-500 text-white font-medium shadow-lg shadow-violet-600/25 transition-[background-color,box-shadow] duration-300 hover:shadow-violet-500/40"
+                  >
+                    <a href={listenNowUrl} target="_blank" rel="noopener noreferrer">
+                      <Headphones className="h-4 w-4 mr-2" />
+                      Listen Now
+                    </a>
+                  </Button>
                 </div>
               )}
 
