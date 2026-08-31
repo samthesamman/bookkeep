@@ -369,9 +369,30 @@ export default function BookDetails() {
   const displaySeriesPosition = pick(local.seriesPosition, clean(book.seriesPosition));
   const displaySeriesId = book.seriesId ?? dbBook?.series_id ?? undefined;
 
+  const seriesText = displaySeries
+    ? `${displaySeries}${displaySeriesPosition ? ` #${displaySeriesPosition}` : ''}`
+    : null;
+  // Rendered in two places (the compact mobile header and the desktop info
+  // column), so keep it here rather than duplicating the link/plain-text branch.
+  const renderSeries = (className: string) => {
+    if (!seriesText) return null;
+    return displaySeriesId ? (
+      <Link
+        to={`/series/${displaySeriesId}`}
+        className={`${className} text-primary hover:underline underline-offset-4`}
+      >
+        {seriesText}
+      </Link>
+    ) : (
+      <span className={`${className} text-muted-foreground`}>{seriesText}</span>
+    );
+  };
+
+  const authorHref = `/author?name=${encodeURIComponent(displayAuthor)}`;
+
   return (
     <>
-      <div className="space-y-10 animate-fade-in-up">
+      <div className="space-y-8 md:space-y-10 animate-fade-in-up">
         {/* Back Button — mirrors the Esc-to-go-back behaviour */}
         {(() => {
           const backState = location.state as { from?: string; fromLabel?: string } | null;
@@ -391,7 +412,7 @@ export default function BookDetails() {
         })()}
 
         {/* Hero Section */}
-        <div className="relative rounded-3xl overflow-hidden">
+        <div className="relative rounded-2xl md:rounded-3xl overflow-hidden border border-border/40 md:border-0 bg-card/20 md:bg-transparent">
           {/* Blurred cover background – hidden on mobile for performance */}
           <div className="absolute inset-0 hidden md:block">
             <img
@@ -404,11 +425,14 @@ export default function BookDetails() {
           </div>
 
           {/* Content */}
-          <div className="relative flex flex-col md:flex-row gap-8 lg:gap-12 p-6 md:p-10">
-            {/* Cover */}
-            <div className="flex-shrink-0 mx-auto md:mx-0">
-              <div className="book-cover-glow">
-                <div className="book-cover w-52 md:w-64 aspect-[2/3]">
+          <div className="relative flex flex-col gap-6 p-4 sm:p-6 md:flex-row md:gap-10 lg:gap-12 md:p-10">
+            {/* Cover — paired with a compact identity block on mobile so the
+                title/author/rating sit beside the cover instead of stacking
+                below a full-width poster. On md the identity moves into the
+                info column (see the `md:contents` block below). */}
+            <div className="flex flex-row items-start gap-4 sm:gap-5 md:block md:flex-shrink-0">
+              <div className="book-cover-glow shrink-0">
+                <div className="book-cover w-[7.5rem] sm:w-40 md:w-64 aspect-[2/3]">
                   <img
                     src={displayCover}
                     alt={displayTitle}
@@ -419,40 +443,63 @@ export default function BookDetails() {
                   />
                 </div>
               </div>
+
+              {/* Compact identity — mobile only */}
+              <div className="flex min-w-0 flex-1 flex-col gap-1.5 pt-0.5 md:hidden">
+                {renderSeries('text-xs font-medium')}
+                <h1 className="text-xl font-bold leading-snug tracking-tight text-foreground text-balance">
+                  {displayTitle}
+                </h1>
+                <Link
+                  to={authorHref}
+                  className="w-fit text-sm font-medium text-primary hover:underline underline-offset-4"
+                >
+                  {displayAuthor}
+                </Link>
+                <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                  <span className="inline-flex items-center gap-1 font-semibold text-foreground">
+                    <Star className="h-3.5 w-3.5 fill-amber-400 text-amber-400" />
+                    {formatRating(displayRating)}
+                  </span>
+                  <span className="inline-flex items-center gap-1">
+                    <Calendar className="h-3.5 w-3.5" />
+                    {formatDate(displayPublishedDate)}
+                  </span>
+                  {displayPageCount > 0 && (
+                    <span className="inline-flex items-center gap-1">
+                      <BookOpen className="h-3.5 w-3.5" />
+                      {displayPageCount} pages
+                    </span>
+                  )}
+                </div>
+              </div>
             </div>
 
-            {/* Info */}
-            <div className="flex-1 space-y-5 text-center md:text-left">
-              {/* Series link */}
-              {displaySeries &&
-                (displaySeriesId ? (
-                  <Link
-                    to={`/series/${displaySeriesId}`}
-                    className="inline-flex items-center gap-2 text-primary text-sm font-medium hover:underline underline-offset-4"
-                  >
-                    {displaySeries} {displaySeriesPosition ? `#${displaySeriesPosition}` : ''}
-                  </Link>
-                ) : (
-                  <p className="text-sm font-medium text-muted-foreground">
-                    {displaySeries} {displaySeriesPosition ? `#${displaySeriesPosition}` : ''}
-                  </p>
-                ))}
+            {/* Info.
+                On mobile this is an explicit flex column so `order-*` can float
+                the availability/library/action region up directly under the
+                compact header — genres and the (often long) description get
+                `order-last` and drop below it. `md:order-none` restores the
+                natural reading order on larger screens. */}
+            <div className="flex-1 flex flex-col gap-5 text-left">
+              {/* Identity — desktop only; `md:contents` keeps these as direct
+                  flex children of the info column so the column gap applies. */}
+              <div className="hidden md:contents">
+                {renderSeries('w-fit text-sm font-medium')}
+                <h1 className="text-4xl lg:text-5xl font-bold text-foreground tracking-tight leading-tight">
+                  {displayTitle}
+                </h1>
+                <Link
+                  to={authorHref}
+                  className="w-fit text-xl text-primary font-medium hover:underline underline-offset-4 transition-colors"
+                >
+                  {displayAuthor}
+                </Link>
+              </div>
 
-              {/* Title */}
-              <h1 className="text-3xl md:text-4xl lg:text-5xl font-bold text-foreground tracking-tight leading-tight">
-                {displayTitle}
-              </h1>
-
-              {/* Author */}
-              <Link
-                to={`/author?name=${encodeURIComponent(displayAuthor)}`}
-                className="inline-block text-xl text-primary font-medium hover:underline underline-offset-4 transition-colors"
-              >
-                {displayAuthor}
-              </Link>
-
-              {/* Meta info */}
-              <div className="flex flex-wrap justify-center md:justify-start gap-5 text-sm">
+              {/* Meta info — desktop only; the mobile header carries a compact
+                  version above. */}
+              <div className="hidden md:flex flex-wrap gap-5 text-sm">
                 <div className="flex items-center gap-2">
                   <Star className="h-4 w-4 fill-amber-400 text-amber-400" />
                   <span className="font-semibold text-foreground">{formatRating(displayRating)}</span>
@@ -476,12 +523,12 @@ export default function BookDetails() {
 
               {/* Genres */}
               {displayGenres.length > 0 && (
-                <div className="flex flex-wrap justify-center md:justify-start gap-2">
+                <div className="order-last md:order-none flex flex-wrap gap-2">
                   {displayGenres.map((genre) => (
                     <Badge
                       key={genre}
                       variant="secondary"
-                      className="px-3 py-1 rounded-lg bg-muted/50 border-border/50 text-muted-foreground font-medium"
+                      className="px-2.5 py-0.5 rounded-md bg-muted/50 border-border/50 text-xs text-muted-foreground font-medium"
                     >
                       {genre}
                     </Badge>
@@ -490,19 +537,19 @@ export default function BookDetails() {
               )}
 
               {/* Description */}
-              <div className="max-w-2xl">
-                <h2 className="text-lg font-semibold text-foreground mb-3">Description</h2>
-                <p className="text-muted-foreground leading-relaxed">
+              <div className="order-last md:order-none max-w-2xl">
+                <h2 className="text-base md:text-lg font-semibold text-foreground mb-2 md:mb-3">Description</h2>
+                <p className="text-sm md:text-base text-muted-foreground leading-relaxed">
                   {cleanDescription(displayDescription)}
                 </p>
               </div>
 
               {/* Availability badges */}
-              <div className="flex flex-wrap justify-center md:justify-start gap-2 pt-2">
+              <div className="flex flex-wrap gap-2">
                 {ebookAvailable && (
-                  <div className="group flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-500/10 border border-emerald-500/30">
-                    <BookOpen className="h-4 w-4 text-emerald-400" />
-                    <span className="text-sm font-medium text-emerald-400">eBook Available</span>
+                  <div className="group flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/30">
+                    <BookOpen className="h-3.5 w-3.5 text-emerald-400" />
+                    <span className="text-xs md:text-sm font-medium text-emerald-400">eBook Available</span>
                     {isAdmin && dbBook?.id && dbBook.ebook_available && (
                       <button
                         onClick={() => {
@@ -519,9 +566,9 @@ export default function BookDetails() {
                   </div>
                 )}
                 {audiobookAvailable && (
-                  <div className="group flex items-center gap-2 px-4 py-2 rounded-xl bg-violet-500/10 border border-violet-500/30">
-                    <Headphones className="h-4 w-4 text-violet-400" />
-                    <span className="text-sm font-medium text-violet-400">Audiobook Available</span>
+                  <div className="group flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-violet-500/10 border border-violet-500/30">
+                    <Headphones className="h-3.5 w-3.5 text-violet-400" />
+                    <span className="text-xs md:text-sm font-medium text-violet-400">Audiobook Available</span>
                     {isAdmin && dbBook?.id && dbBook.audiobook_available && (
                       <button
                         onClick={() => {
@@ -541,7 +588,7 @@ export default function BookDetails() {
 
               {/* In your library — download / email straight from Calibre */}
               {calibre && (calibreEbookFormats.length > 0 || calibreAudioFormats.length > 0) && (
-                <div className="rounded-2xl border border-border/50 bg-card/30 p-5 text-left space-y-4">
+                <div className="rounded-xl md:rounded-2xl border border-border/50 bg-card/30 p-4 md:p-5 space-y-4">
                   <div className="flex items-center gap-2">
                     <Library className="h-4 w-4 text-primary" />
                     <h2 className="text-sm font-semibold text-foreground">In your library</h2>
@@ -601,7 +648,7 @@ export default function BookDetails() {
 
               {/* Listen on Audiobookshelf — deep link for a linked ABS item */}
               {listenNowUrl && (
-                <div className="rounded-2xl border border-border/50 bg-card/30 p-5 text-left space-y-3">
+                <div className="rounded-xl md:rounded-2xl border border-border/50 bg-card/30 p-4 md:p-5 space-y-3">
                   <div className="flex items-center gap-2">
                     <Headphones className="h-4 w-4 text-violet-400" />
                     <h2 className="text-sm font-semibold text-foreground">
@@ -612,7 +659,7 @@ export default function BookDetails() {
                   </div>
                   <Button
                     asChild
-                    className="h-11 px-5 rounded-xl bg-violet-600 hover:bg-violet-500 text-white font-medium shadow-lg shadow-violet-600/25 transition-[background-color,box-shadow] duration-300 hover:shadow-violet-500/40"
+                    className="w-full sm:w-auto h-11 px-5 rounded-xl bg-violet-600 hover:bg-violet-500 text-white font-medium shadow-lg shadow-violet-600/25 transition-[background-color,box-shadow] duration-300 hover:shadow-violet-500/40"
                   >
                     <a href={listenNowUrl} target="_blank" rel="noopener noreferrer">
                       <Headphones className="h-4 w-4 mr-2" />
@@ -622,8 +669,9 @@ export default function BookDetails() {
                 </div>
               )}
 
-              {/* Action buttons */}
-              <div className="flex flex-wrap justify-center md:justify-start gap-3 pt-4">
+              {/* Action buttons — full-width stacked on mobile so the primary
+                  calls to action read as a clean panel; inline row on sm+. */}
+              <div className="grid grid-cols-1 gap-2.5 pt-1 sm:flex sm:flex-wrap sm:gap-3 sm:pt-4">
                 {/* Direct Download button - show when direct downloads enabled */}
                 {canDownload && hasMissingFormat && directDownloadsEnabled && (
                   <Button
@@ -633,7 +681,7 @@ export default function BookDetails() {
                       setSearchSource('direct');
                       setSearchOpen(true);
                     }}
-                    className="h-12 px-6 rounded-xl bg-green-600 hover:bg-green-500 text-white font-medium shadow-lg shadow-green-600/25 transition-[background-color,box-shadow] duration-300 hover:shadow-green-500/40"
+                    className="w-full sm:w-auto h-12 px-6 rounded-xl bg-green-600 hover:bg-green-500 text-white font-medium shadow-lg shadow-green-600/25 transition-[background-color,box-shadow] duration-300 hover:shadow-green-500/40"
                   >
                     <Globe className="h-4 w-4 mr-2" />
                     Direct Download
@@ -651,8 +699,8 @@ export default function BookDetails() {
                       setSearchOpen(true);
                     }}
                     className={directDownloadsEnabled
-                      ? "h-12 px-6 rounded-xl border-border/50 hover:bg-card hover:border-primary/30"
-                      : "h-12 px-6 rounded-xl bg-primary hover:bg-primary/90 text-primary-foreground font-medium shadow-lg shadow-primary/25 transition-[background-color,box-shadow] duration-300 hover:shadow-primary/40"
+                      ? "w-full sm:w-auto h-12 px-6 rounded-xl border-border/50 hover:bg-card hover:border-primary/30"
+                      : "w-full sm:w-auto h-12 px-6 rounded-xl bg-primary hover:bg-primary/90 text-primary-foreground font-medium shadow-lg shadow-primary/25 transition-[background-color,box-shadow] duration-300 hover:shadow-primary/40"
                     }
                   >
                     <Search className="h-4 w-4 mr-2" />
@@ -666,7 +714,7 @@ export default function BookDetails() {
                     size="lg"
                     variant="outline"
                     onClick={() => setRequestOpen(true)}
-                    className="h-12 px-6 rounded-xl border-border/50 hover:bg-card hover:border-primary/30"
+                    className="w-full sm:w-auto h-12 px-6 rounded-xl border-border/50 hover:bg-card hover:border-primary/30"
                   >
                     <Clock className="h-4 w-4 mr-2" />
                     {preferredFormat === 'ebook'
@@ -679,7 +727,7 @@ export default function BookDetails() {
 
                 {/* Processing indicator */}
                 {hasAnyRequests && !ebookAvailable && !audiobookAvailable && (
-                  <div className="inline-flex items-center gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-5 py-3 text-sm font-medium text-amber-400">
+                  <div className="flex w-full sm:w-auto items-center justify-center sm:justify-start gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-5 py-3 text-sm font-medium text-amber-400">
                     <Clock className="h-4 w-4" />
                     Requested • Processing
                   </div>
@@ -689,7 +737,7 @@ export default function BookDetails() {
                     size="lg"
                     variant="outline"
                     asChild
-                    className="h-12 px-6 rounded-xl border-border/50 hover:bg-card hover:border-primary/30"
+                    className="w-full sm:w-auto h-12 px-6 rounded-xl border-border/50 hover:bg-card hover:border-primary/30"
                   >
                     <a
                       href={`https://hardcover.app/books/${book.hardcoverSlug}`}
@@ -707,7 +755,7 @@ export default function BookDetails() {
                     variant="outline"
                     onClick={() => clearRequestsMutation.mutate()}
                     disabled={clearRequestsMutation.isPending}
-                    className="h-12 px-6 rounded-xl border-rose-500/30 text-rose-400 hover:bg-rose-500/10 hover:border-rose-500/50"
+                    className="w-full sm:w-auto h-12 px-6 rounded-xl border-rose-500/30 text-rose-400 hover:bg-rose-500/10 hover:border-rose-500/50"
                   >
                     <Trash2 className="h-4 w-4 mr-2" />
                     {clearRequestsMutation.isPending
