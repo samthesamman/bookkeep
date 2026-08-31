@@ -10,6 +10,7 @@ import structlog
 from ..import Release, ReleaseSource, register_source
 from .api import ProwlarrClient
 from .utils import (
+    AUDIOBOOK_FORMAT_BONUS,
     extract_format,
     extract_language,
     is_audiobook,
@@ -178,8 +179,20 @@ class ProwlarrSource(ReleaseSource):
             if release:
                 releases.append(release)
 
-        # Sort by quality score (highest first)
-        releases.sort(key=lambda r: r.quality_score, reverse=True)
+        # Sort by quality score (highest first), then by audiobook container
+        # format as a tiebreaker. The quality score is clamped at 100, so two
+        # otherwise-equal releases (e.g. same seeders/size) both land at 100 and
+        # the format bonus baked into the score is lost - this makes m4b still
+        # win over mp3 in that case without letting a weak m4b jump a stronger mp3.
+        def _sort_key(r: Release):
+            container_rank = (
+                AUDIOBOOK_FORMAT_BONUS.get(r.format, 0)
+                if (r.metadata or {}).get("is_audiobook")
+                else 0
+            )
+            return (r.quality_score, container_rank)
+
+        releases.sort(key=_sort_key, reverse=True)
 
         logger.info(
             "prowlarr_search_complete",

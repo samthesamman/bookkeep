@@ -468,6 +468,37 @@ class TestQualitySorting:
         # EPUB should rank highest (preferred format, good size, many seeders)
         assert results[0].format == "epub"
 
+    def test_audiobook_m4b_wins_tiebreak_when_scores_equal(self, mock_prowlarr_source):
+        """Two audiobooks both maxing out at score 100: m4b must be chosen"""
+        common = {
+            "size": 400000000,  # good audiobook size (+10)
+            "protocol": "torrent",
+            "seeders": 500,  # max seeder bonus
+            "categories": [{"id": 3030, "name": "Audio/Audiobook"}],
+            "publishDate": "2026-08-20T00:00:00Z",  # recent (+5)
+        }
+        mock_prowlarr_source.client.search_with_retry.return_value = [
+            {
+                **common,
+                "title": "The Great Big Book [ENG / MP3] [VIP]",
+                "fileName": "The Great Big Book [ENG / MP3] [VIP].torrent",
+                "downloadUrl": "http://download/mp3",
+            },
+            {
+                **common,
+                "title": "The Great Big Book [ENG / M4B]",
+                "fileName": "The Great Big Book [ENG / M4B].torrent",
+                "downloadUrl": "http://download/m4b",
+            },
+        ]
+
+        results = mock_prowlarr_source.search(
+            title="The Great Big Book", format_type="audiobook"
+        )
+
+        assert results[0].quality_score == results[1].quality_score == 100.0
+        assert results[0].format == "m4b"
+
 
 class TestEdgeCases:
     """Test edge cases and error handling"""
