@@ -67,7 +67,7 @@ export function CalibreFormatActions({
   return (
     <div className="space-y-2">
       {heading && <h3 className="text-sm font-semibold text-foreground">{heading}</h3>}
-      <div className="space-y-2">
+      <div>
         {emailFormat && (
           <Button
             disabled={emailing !== null || !deliveryEmail}
@@ -87,11 +87,15 @@ export function CalibreFormatActions({
             Send to Device
           </Button>
         )}
-        {formats.map((fmt) => (
-          <div key={fmt.format} className="flex flex-wrap items-center gap-2">
+        <div
+          className={`flex flex-col sm:flex-row sm:flex-wrap gap-2 ${emailFormat ? 'mt-4' : ''}`}
+        >
+          {formats.map((fmt) => (
             <Button
+              key={fmt.format}
               variant="outline"
               size="sm"
+              className="w-full sm:w-auto"
               disabled={downloading !== null}
               onClick={() => handleDownload(fmt.format, fmt.name)}
             >
@@ -107,8 +111,8 @@ export function CalibreFormatActions({
                 </span>
               ) : null}
             </Button>
-          </div>
-        ))}
+          ))}
+        </div>
       </div>
       {emailFormat && !deliveryEmail && (
         <p className="text-xs text-muted-foreground">
