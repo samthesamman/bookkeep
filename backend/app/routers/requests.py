@@ -119,6 +119,7 @@ async def create_request(
         db_request.admin_notes = None
         db_request.edition_id = request.edition_id
         db_request.auto_email_when_available = auto_email
+        db_request.availability_notified_at = None
         db_request.auto_email_sent_at = None
         db_request.auto_email_attempts = 0
         db_request.updated_at = datetime.now(timezone.utc)

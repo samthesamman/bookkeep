@@ -12,7 +12,6 @@ import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
-import { Switch } from '@/components/ui/switch';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import { useMutation, useQueryClient, useQuery } from '@tanstack/react-query';
@@ -66,11 +65,12 @@ export function RequestDialog({
 }: RequestDialogProps) {
   const [selectedFormat, setSelectedFormat] = useState<FormatSelection | null>(null);
   const [notes, setNotes] = useState('');
-  // Opt-in to the "email me when available" flow, on by default for everyone.
-  const [autoEmail, setAutoEmail] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const queryClient = useQueryClient();
   const { user } = useUser();
+  // Where the "it's available" notification goes; the eBook file (if any) goes
+  // to the separately configured delivery address.
+  const accountEmail = user?.email || '';
   const deliveryEmail = user?.book_delivery_email || '';
 
   // Fetch existing requests for this book
@@ -111,7 +111,6 @@ export function RequestDialog({
   useEffect(() => {
     if (!open) {
       setNotes('');
-      setAutoEmail(true);
     }
   }, [open]);
 
@@ -161,7 +160,6 @@ export function RequestDialog({
         book_id: bookId,
         format: format,
         notes: notes || undefined,
-        auto_email_when_available: autoEmail,
       });
     },
   });
@@ -193,11 +191,7 @@ export function RequestDialog({
       toast.success('Request submitted!', {
         description:
           `Your ${formatLabel} request for "${book.title}" has been submitted.` +
-          (autoEmail && deliveryEmail
-            ? ` We'll email ${deliveryEmail} when it's available.`
-            : autoEmail
-              ? " Add a delivery email in Settings and we'll notify you when it's available."
-              : ''),
+          (accountEmail ? ` We'll email ${accountEmail} when it's available.` : ''),
       });
 
       setNotes('');
@@ -215,15 +209,8 @@ export function RequestDialog({
   const isLoading = isLoadingRequests;
   const noFormatsAvailable = !canRequestEbook && !canRequestAudiobook;
 
-  // What the "email me when available" toggle actually does depends on format:
-  // eBooks are sent as a file; audiobooks get a notification only.
-  const emailTarget = deliveryEmail || 'your delivery email';
-  const autoEmailDescription =
-    selectedFormat === 'audiobook'
-      ? `Emails ${emailTarget} when the audiobook is available (no file attached).`
-      : selectedFormat === 'both'
-        ? `Emails the eBook file to ${emailTarget}, plus a note when the audiobook is available.`
-        : `Emails the eBook file to ${emailTarget} once it's in the library.`;
+  // eBook requests can also have the file itself delivered to a separate address.
+  const includesEbook = selectedFormat === 'ebook' || selectedFormat === 'both';
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -348,27 +335,29 @@ export function RequestDialog({
               />
             </div>
 
-            {/* Auto-email when available — on by default for everyone */}
-            <div className="flex items-start justify-between gap-3 rounded-lg border border-border p-3">
-              <div className="space-y-1">
-                <Label htmlFor="auto-email" className="flex items-center gap-2 text-foreground">
-                  <Mail className="h-4 w-4" />
-                  Email me when available
-                </Label>
-                <p className="text-xs text-muted-foreground">
-                  {autoEmailDescription}
-                </p>
-                {!deliveryEmail && (
-                  <p className="text-xs text-amber-500">
-                    Add a delivery email under{' '}
-                    <Link to="/settings" className="underline">
-                      Settings
-                    </Link>{' '}
-                    to receive it.
-                  </p>
-                )}
+            {/* What happens when the request becomes available */}
+            <div className="space-y-1 rounded-lg border border-border p-3">
+              <div className="flex items-center gap-2 text-foreground text-sm font-medium">
+                <Mail className="h-4 w-4" />
+                When it's available
               </div>
-              <Switch id="auto-email" checked={autoEmail} onCheckedChange={setAutoEmail} />
+              <p className="text-xs text-muted-foreground">
+                {accountEmail
+                  ? `We'll email ${accountEmail} to let you know.`
+                  : "We'll email you to let you know."}
+                {includesEbook && deliveryEmail
+                  ? ` The eBook file will also be sent to ${deliveryEmail}.`
+                  : ''}
+              </p>
+              {includesEbook && !deliveryEmail && (
+                <p className="text-xs text-amber-500">
+                  Add a delivery email under{' '}
+                  <Link to="/settings" className="underline">
+                    Settings
+                  </Link>{' '}
+                  to also get the eBook file.
+                </p>
+              )}
             </div>
           </div>
         )}

@@ -129,11 +129,14 @@ def send_availability_notification(
 ) -> models.EmailLog:
     """Tell the user a requested title is now available — no file attached.
 
-    Used for audiobooks (which we don't email as files) and any other case where
-    we only want to notify. Always writes an EmailLog row and returns it; raises
-    EmailError if the message could not be sent.
+    Sent for every request (ebook or audiobook) once it becomes available.
+    Because nothing is delivered here, it goes to the user's account email
+    address rather than the configured book-delivery address (that address is
+    reserved for actual ebook file delivery, see ``send_book_email``). Always
+    writes an EmailLog row and returns it; raises EmailError if the message
+    could not be sent.
     """
-    recipient = (user.book_delivery_email or "").strip()
+    recipient = (user.email or "").strip()
     label = (book_format or "book").strip() or "book"
     subject = f'"{book_title}" is now available' if book_title else "Your request is now available"
 
@@ -155,7 +158,7 @@ def send_availability_notification(
         raise EmailError(msg)
 
     if not recipient:
-        _fail("No delivery email address is set. Add one under Settings.")
+        _fail("The user has no account email address to notify.")
 
     config = get_smtp_config(db)
     if not config.configured:

@@ -5,7 +5,7 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 from sqlalchemy.orm import Session
-from sqlalchemy import or_, func as sa_func
+from sqlalchemy import or_, and_, func as sa_func
 from app.database import SessionLocal
 from app.models import Book
 from app import schemas
@@ -855,13 +855,18 @@ MAX_AUTO_EMAIL_ATTEMPTS = 5
 
 
 async def send_availability_emails():
-    """Notify users when a book they requested (with the flag set) is available.
+    """Email users when a book they requested reaches ``available`` status.
 
-    Picks up requests flagged ``auto_email_when_available`` that have reached
-    ``available`` status. eBooks are emailed as a file attachment pulled from the
-    Calibre library (retried across runs until the file turns up or SMTP attempts
-    are exhausted). Audiobooks get a plain "it's available" notification with no
-    attachment.
+    Two independent things can happen per request:
+
+    * **Availability notification** — a short "your request is available" email to
+      the user's *account* address, for every request (ebook or audiobook), sent
+      once. Deduped via ``availability_notified_at``.
+    * **eBook file delivery** — for ebook requests, the file itself is attached
+      and sent to the user's configured *book-delivery* address (if one is set).
+      Pulled from the Calibre library and retried across runs until the file
+      turns up or the SMTP attempt budget is spent. Tracked by
+      ``auto_email_sent_at`` / ``auto_email_attempts``.
     """
     from app.models import BookRequest
     from app.routers.calibre import get_active_library_path
@@ -878,9 +883,14 @@ async def send_availability_emails():
         pending = (
             db.query(BookRequest)
             .filter(
-                BookRequest.auto_email_when_available.is_(True),
-                BookRequest.auto_email_sent_at.is_(None),
                 BookRequest.status == "available",
+                or_(
+                    BookRequest.availability_notified_at.is_(None),
+                    and_(
+                        BookRequest.format == "ebook",
+                        BookRequest.auto_email_sent_at.is_(None),
+                    ),
+                ),
             )
             .all()
         )
@@ -909,25 +919,41 @@ async def send_availability_emails():
         for req in pending:
             user = req.user
             book = req.book
-            if not user or not book or not (user.book_delivery_email or "").strip():
+            if not user or not book:
                 continue
 
-            # Audiobooks: a notification only — we never attach the audio files.
-            if req.format == "audiobook":
-                req.auto_email_attempts = (req.auto_email_attempts or 0) + 1
+            # 1. Availability notification -> the user's account email. Every
+            #    request, both formats, once. Only failed attempts count against
+            #    the shared SMTP retry budget (auto_email_attempts), so a normal
+            #    notification leaves the ebook file-send budget untouched.
+            if req.availability_notified_at is None:
                 try:
                     send_availability_notification(
-                        db, user, book_title=book.title, book_format="audiobook"
+                        db, user, book_title=book.title, book_format=req.format
                     )
-                    req.auto_email_sent_at = datetime.now(timezone.utc)
+                    req.availability_notified_at = datetime.now(timezone.utc)
                     sent += 1
-                    logger.info("availability_email_sent", request_id=req.id, user_id=user.id, book_id=book.id)
+                    logger.info(
+                        "availability_notification_sent",
+                        request_id=req.id, user_id=user.id, book_id=book.id,
+                    )
                 except EmailError as exc:
-                    _note_email_failure(req, exc)
+                    req.auto_email_attempts = (req.auto_email_attempts or 0) + 1
+                    logger.warning(
+                        "availability_notification_failed",
+                        request_id=req.id, attempt=req.auto_email_attempts, error=str(exc),
+                    )
+                    if req.auto_email_attempts >= MAX_AUTO_EMAIL_ATTEMPTS:
+                        req.availability_notified_at = datetime.now(timezone.utc)
+                        logger.error("availability_notification_gave_up", request_id=req.id)
                 db.commit()
-                continue
 
-            # eBooks: attach the file once it shows up in the Calibre library.
+            # 2. eBook file delivery -> the configured book-delivery address.
+            #    Audiobooks are never attached; ebooks only when an address is set.
+            if req.format != "ebook" or req.auto_email_sent_at is not None:
+                continue
+            if not (user.book_delivery_email or "").strip():
+                continue
             if not library_path:
                 continue
 

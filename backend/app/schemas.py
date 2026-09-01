@@ -146,6 +146,7 @@ class BookRequestResponse(BaseModel):
     edition_id: Optional[int] = None
     auto_email_when_available: Optional[bool] = False
     auto_email_sent_at: Optional[datetime] = None
+    availability_notified_at: Optional[datetime] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
     book: Optional[BookResponse] = None

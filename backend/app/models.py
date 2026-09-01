@@ -116,7 +116,12 @@ class BookRequest(Base):
     readarr_search_triggered = Column(Boolean, nullable=True)  # Deprecated
     readarr_search_status_code = Column(Integer, nullable=True)  # Deprecated
     readarr_message = Column(Text, nullable=True)  # Deprecated
-    # Email the file to the requester's delivery address once it becomes available
+    # "Your request is available" notification sent to the user's account email
+    # (both formats, every request). Set once; used to dedupe across scheduler runs.
+    availability_notified_at = Column(DateTime(timezone=True), nullable=True)
+    # eBook file delivery to the user's configured book-delivery address. The flag
+    # is retained for backward compatibility; delivery is now gated purely on a
+    # delivery address being set. auto_email_sent_at/attempts track that send.
     auto_email_when_available = Column(Boolean, default=False, nullable=False)
     auto_email_sent_at = Column(DateTime(timezone=True), nullable=True)
     auto_email_attempts = Column(Integer, default=0, nullable=False)
