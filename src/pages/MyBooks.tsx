@@ -184,8 +184,8 @@ export default function MyBooks() {
           My Books
         </h1>
         <p className="mt-1 text-muted-foreground">
-          Everything in your Calibre library.
-          {data ? ` ${data.total} book${data.total === 1 ? '' : 's'}.` : ''}
+          Books already downloaded and ready to send.
+          {data ? ` ${data.total} book${data.total === 1 ? '' : 's'} in total.` : ''}
         </p>
       </div>
 

@@ -179,8 +179,8 @@ export default function MyAudiobooks() {
           My Audiobooks
         </h1>
         <p className="mt-1 text-muted-foreground">
-          Everything in your Audiobookshelf library.
-          {data ? ` ${data.length} audiobook${data.length === 1 ? '' : 's'}.` : ''}
+          Audiobooks already downloaded and ready to listen to.
+          {data ? ` ${data.length} audiobook${data.length === 1 ? '' : 's'} in total.` : ''}
         </p>
       </div>
 
