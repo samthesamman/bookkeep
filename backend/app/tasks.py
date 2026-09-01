@@ -385,6 +385,13 @@ def reconcile_ebook_library_imports(
         except calibre_service.CalibreError as exc:
             logger.warning("ebook_library_reconcile_lookup_failed", error=str(exc))
 
+        # Fuzzy match missed - fall back to a persisted link for the stragglers.
+        for t in tasks:
+            if t.book and matched_ids.get(t.id) is None:
+                matched_ids[t.id] = calibre_link_service.linked_library_book_id(
+                    db, library_path, t.book_id, "ebook"
+                )
+
     now = datetime.now(timezone.utc)
     promoted: list[int] = []
     for task in tasks:
@@ -574,6 +581,12 @@ async def reconcile_calibre_library():
         now = datetime.now(timezone.utc)
         updated = 0
         for req, calibre_id in zip(reqs, matches):
+            if calibre_id is None:
+                # Fuzzy match missed - trust a persisted link if the book still
+                # carries an ebook format in the library.
+                calibre_id = calibre_link_service.linked_library_book_id(
+                    db, library_path, req.book_id, "ebook"
+                )
             if calibre_id is None:
                 continue
             prev = req.status

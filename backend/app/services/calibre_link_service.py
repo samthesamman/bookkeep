@@ -43,6 +43,65 @@ def get_link_for_book(db: Session, book_id: int) -> Optional[CalibreBookLink]:
     )
 
 
+def linked_library_book_id(
+    db: Session,
+    library_path: str,
+    book_id: int,
+    fmt_kind: str = "ebook",
+) -> Optional[int]:
+    """Calibre book id for a ``Book`` via its persisted link, or None.
+
+    Validates the link before trusting it: the Calibre id must still resolve and
+    carry a format of ``fmt_kind`` ("ebook" / "audiobook", or "" to skip the
+    format check). Used as a fallback when live fuzzy matching misses a book
+    whose metadata drifted after it was linked.
+    """
+    link = get_link_for_book(db, book_id)
+    if link is None:
+        return None
+    try:
+        formats = calibre_service.formats_for_ids(
+            library_path, [link.calibre_book_id]
+        ).get(link.calibre_book_id, [])
+    except calibre_service.CalibreError as exc:
+        logger.warning(
+            "calibre_link_format_probe_failed", book_id=book_id, error=str(exc)
+        )
+        return None
+    if not formats:
+        return None
+    if fmt_kind and not any(
+        calibre_service.classify_format(f) == fmt_kind for f in formats
+    ):
+        return None
+    return link.calibre_book_id
+
+
+def find_library_book_id(
+    db: Session,
+    library_path: str,
+    book: Book,
+    fmt_kind: str = "ebook",
+) -> Optional[int]:
+    """Calibre book id for a catalog ``Book``, or None if it isn't in the library.
+
+    Tries a live fuzzy title/author/ISBN match first, then falls back to a
+    validated persisted link (see ``linked_library_book_id``).
+    """
+    try:
+        match_id = calibre_service.find_book_match(
+            library_path, book.title, book.author, book.isbn
+        )
+    except calibre_service.CalibreError as exc:
+        logger.warning(
+            "calibre_link_fuzzy_probe_failed", book_id=book.id, error=str(exc)
+        )
+        match_id = None
+    if match_id is not None:
+        return match_id
+    return linked_library_book_id(db, library_path, book.id, fmt_kind)
+
+
 def _rank(source: str, confirmed: bool) -> tuple[int, int]:
     return (1 if confirmed else 0, _SOURCE_RANK.get(source, 0))
 

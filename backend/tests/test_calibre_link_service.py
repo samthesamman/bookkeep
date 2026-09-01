@@ -144,6 +144,36 @@ def test_sync_availability_flags(db, library):
     assert cls.sync_availability_flags(db, library) == 0
 
 
+def test_find_library_book_id_prefers_fuzzy_then_link(db, library):
+    # Fuzzy match works on its own — no link needed.
+    b1 = _book(db, title="The Hobbit", author="J.R.R. Tolkien")
+    assert cls.find_library_book_id(db, library, b1, "ebook") == 10
+
+    # Metadata drifted so fuzzy misses, but a persisted link carries it.
+    b2 = _book(db, title="Dune: Deluxe Anniversary Edition", author="F. Herbert (ed.)")
+    assert cls.find_library_book_id(db, library, b2, "ebook") is None
+    cls.upsert_link(db, calibre_book_id=20, book_id=b2.id, source="download", confirmed=True)
+    assert cls.find_library_book_id(db, library, b2, "ebook") == 20
+
+
+def test_linked_library_book_id_validates_format_and_existence(db, library):
+    b = _book(db, title="Whatever", author="Someone")
+    # Calibre book 10 has only an EPUB (no audio).
+    cls.upsert_link(db, calibre_book_id=10, book_id=b.id, source="manual", confirmed=True)
+    assert cls.linked_library_book_id(db, library, b.id, "ebook") == 10
+    assert cls.linked_library_book_id(db, library, b.id, "audiobook") is None
+    assert cls.linked_library_book_id(db, library, b.id, "") == 10
+
+    # Link to a Calibre id that no longer exists.
+    b2 = _book(db, title="Gone", author="X")
+    cls.upsert_link(db, calibre_book_id=4242, book_id=b2.id, source="manual", confirmed=True)
+    assert cls.linked_library_book_id(db, library, b2.id, "") is None
+
+    # No link at all.
+    b3 = _book(db, title="Unlinked", author="Y")
+    assert cls.linked_library_book_id(db, library, b3.id, "ebook") is None
+
+
 def test_books_missing_metadata_selects_unrefreshed_and_stale(db):
     from datetime import datetime, timedelta, timezone
 

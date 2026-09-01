@@ -851,7 +851,7 @@ async def update_processing_requests_status(db: Session) -> None:
     try:
         from sqlalchemy.orm import joinedload
         from app.routers.calibre import get_active_library_path
-        from app.services import calibre_service
+        from app.services import calibre_service, calibre_link_service
         not_found_after = timedelta(hours=6)
         now = datetime.now(timezone.utc)
 
@@ -880,11 +880,13 @@ async def update_processing_requests_status(db: Session) -> None:
                 logger.warning("request_missing_book", request_id=req.id)
                 continue
 
-            # Ebooks: if it's in the Calibre library now, it's available.
+            # Ebooks: if it's in the Calibre library now, it's available. Fuzzy
+            # title/author match, falling back to a persisted link for books whose
+            # metadata drifted after linking.
             if req.format == "ebook" and calibre_library_path:
                 try:
-                    match_id = calibre_service.find_book_match(
-                        calibre_library_path, req.book.title, req.book.author, req.book.isbn
+                    match_id = calibre_link_service.find_library_book_id(
+                        db, calibre_library_path, req.book, "ebook"
                     )
                 except calibre_service.CalibreError as exc:
                     logger.warning("request_calibre_lookup_failed", request_id=req.id, error=str(exc))
