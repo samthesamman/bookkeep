@@ -32,6 +32,10 @@ export function CalibreFormatActions({
 
   if (formats.length === 0) return null;
 
+  // Only EPUB can be emailed, and only ever one button regardless of how many
+  // formats exist. If there's no EPUB, no email button is shown.
+  const emailFormat = formats.find((fmt) => fmt.format.toUpperCase() === 'EPUB');
+
   const handleDownload = async (format: string, name: string) => {
     setDownloading(format);
     try {
@@ -83,26 +87,28 @@ export function CalibreFormatActions({
                 </span>
               ) : null}
             </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              disabled={emailing !== null || !deliveryEmail}
-              title={
-                deliveryEmail
-                  ? `Email this ${fmt.format} to ${deliveryEmail}`
-                  : 'Set a delivery email under Settings first'
-              }
-              onClick={() => handleEmail(fmt.format)}
-            >
-              {emailing === fmt.format ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <Mail className="mr-2 h-4 w-4" />
-              )}
-              Email to myself
-            </Button>
           </div>
         ))}
+        {emailFormat && (
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={emailing !== null || !deliveryEmail}
+            title={
+              deliveryEmail
+                ? `Email this ${emailFormat.format} to ${deliveryEmail}`
+                : 'Set a delivery email under Settings first'
+            }
+            onClick={() => handleEmail(emailFormat.format)}
+          >
+            {emailing === emailFormat.format ? (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            ) : (
+              <Mail className="mr-2 h-4 w-4" />
+            )}
+            Email to myself
+          </Button>
+        )}
       </div>
       {!deliveryEmail && (
         <p className="text-xs text-muted-foreground">
