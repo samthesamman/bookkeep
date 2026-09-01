@@ -117,7 +117,7 @@ export default function CalibreSettings() {
             <div>
               <CardTitle className="text-foreground">Calibre</CardTitle>
               <CardDescription>
-                Point Bookstore at a Calibre library directory to browse it on the "My Books" page.
+                Point Bookworms at a Calibre library directory to browse it on the "My Books" page.
               </CardDescription>
             </div>
           </div>
@@ -151,7 +151,7 @@ export default function CalibreSettings() {
           />
           <p className="text-xs text-muted-foreground">
             The folder that contains <code className="font-mono">metadata.db</code>. It must be
-            readable by the Bookstore backend (mount it into the container if you run in Docker).
+            readable by the Bookworms backend (mount it into the container if you run in Docker).
           </p>
         </div>
 

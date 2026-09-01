@@ -273,7 +273,7 @@ function OidcSettingsCard() {
           </div>
           <Input
             id="oidc-issuer"
-            placeholder="https://sso.example.com/application/o/bookstore/"
+            placeholder="https://sso.example.com/application/o/bookworms/"
             value={formData.oidc_issuer_url}
             onChange={(e) => setFormData(prev => ({ ...prev, oidc_issuer_url: e.target.value }))}
             className="bg-secondary border-border"
@@ -749,7 +749,7 @@ function SmtpSettingsCard() {
           <Input
             id="smtp-from"
             type="email"
-            placeholder="bookstore@example.com"
+            placeholder="bookworms@example.com"
             value={form.smtp_from_address}
             onChange={(e) => setForm((p) => ({ ...p, smtp_from_address: e.target.value }))}
             className="bg-secondary border-border"
@@ -1609,7 +1609,7 @@ export default function Settings() {
       <div>
         <h1 className="text-2xl font-bold text-foreground">Settings</h1>
         <p className="text-muted-foreground mt-1">
-          Configure your Bookstore integrations
+          Configure your Bookworms integrations
         </p>
       </div>
 
@@ -2243,7 +2243,7 @@ export default function Settings() {
           <div>
             <h2 className="text-xl font-semibold text-foreground">Jobs & Cache</h2>
             <p className="text-muted-foreground mt-1">
-              Bookstore performs certain maintenance tasks as regularly-scheduled jobs, but they can also be manually triggered below. Manually running a job will not alter its schedule.
+              Bookworms performs certain maintenance tasks as regularly-scheduled jobs, but they can also be manually triggered below. Manually running a job will not alter its schedule.
             </p>
           </div>
 
