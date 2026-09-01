@@ -13,8 +13,9 @@ export interface CalibreFormat {
 }
 
 /**
- * Download / "email to myself" buttons for a book that lives in the Calibre
- * library. Shared by the My Books sheet and the book detail page.
+ * Download / "Send to Device" buttons for a book that lives in the Calibre
+ * library. Shared by the My Books sheet and the book detail page. Only EPUB
+ * can be sent to a device, and only one such button is ever shown.
  */
 export function CalibreFormatActions({
   calibreBookId,
@@ -67,6 +68,25 @@ export function CalibreFormatActions({
     <div className="space-y-2">
       {heading && <h3 className="text-sm font-semibold text-foreground">{heading}</h3>}
       <div className="space-y-2">
+        {emailFormat && (
+          <Button
+            disabled={emailing !== null || !deliveryEmail}
+            title={
+              deliveryEmail
+                ? `Send this ${emailFormat.format} to ${deliveryEmail}`
+                : 'Set a delivery email under Settings first'
+            }
+            onClick={() => handleEmail(emailFormat.format)}
+            className="w-full sm:w-auto h-11 px-5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-medium shadow-lg shadow-emerald-600/25 transition-[background-color,box-shadow] duration-300 hover:shadow-emerald-500/40"
+          >
+            {emailing === emailFormat.format ? (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            ) : (
+              <Mail className="mr-2 h-4 w-4" />
+            )}
+            Send to Device
+          </Button>
+        )}
         {formats.map((fmt) => (
           <div key={fmt.format} className="flex flex-wrap items-center gap-2">
             <Button
@@ -89,34 +109,14 @@ export function CalibreFormatActions({
             </Button>
           </div>
         ))}
-        {emailFormat && (
-          <Button
-            variant="ghost"
-            size="sm"
-            disabled={emailing !== null || !deliveryEmail}
-            title={
-              deliveryEmail
-                ? `Email this ${emailFormat.format} to ${deliveryEmail}`
-                : 'Set a delivery email under Settings first'
-            }
-            onClick={() => handleEmail(emailFormat.format)}
-          >
-            {emailing === emailFormat.format ? (
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            ) : (
-              <Mail className="mr-2 h-4 w-4" />
-            )}
-            Email to myself
-          </Button>
-        )}
       </div>
-      {!deliveryEmail && (
+      {emailFormat && !deliveryEmail && (
         <p className="text-xs text-muted-foreground">
           Add a delivery email under{' '}
           <Link to="/settings" className="text-primary underline">
             Settings
           </Link>{' '}
-          to email books to yourself.
+          to send books to your device.
         </p>
       )}
     </div>
