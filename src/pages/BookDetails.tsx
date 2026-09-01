@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useParams, Link, useSearchParams, useNavigate, useLocation } from 'react-router-dom';
-import { ArrowLeft, Star, Calendar, BookOpen, Tag, Clock, Users, Headphones, Library, ExternalLink, Trash2, Search, X, Download, Globe } from 'lucide-react';
+import { ArrowLeft, Star, Calendar, BookOpen, Tag, Clock, Users, Headphones, Library, ExternalLink, Trash2, Search, X, Download } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -9,7 +9,7 @@ import { RequestDialog } from '@/components/books/RequestDialog';
 import { SearchReleaseDialog } from '@/components/books/SearchReleaseDialog';
 import { BookCard } from '@/components/books/BookCard';
 import { useBookDetails, useBookPrompts } from '@/hooks/useHardcoverBooks';
-import { requestsApi, booksApi, directDownloadApi, calibreApi, audiobookshelfApi } from '@/lib/api';
+import { requestsApi, booksApi, calibreApi, audiobookshelfApi } from '@/lib/api';
 import { transformHardcoverBook } from '@/lib/hardcover';
 import { CalibreFormatActions } from '@/components/books/CalibreFormatActions';
 import { CalibreRelinkDialog } from '@/components/books/CalibreRelinkDialog';
@@ -27,7 +27,7 @@ export default function BookDetails() {
   const [requestOpen, setRequestOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchFormat, setSearchFormat] = useState<'ebook' | 'audiobook'>('ebook');
-  const [searchSource, setSearchSource] = useState<'prowlarr' | 'direct' | undefined>(undefined);
+  const [searchSource, setSearchSource] = useState<'prowlarr' | undefined>(undefined);
   const [relinkOpen, setRelinkOpen] = useState(false);
   const [sourcesOpen, setSourcesOpen] = useState(false);
   const queryClient = useQueryClient();
@@ -79,14 +79,6 @@ export default function BookDetails() {
     refetchInterval: hasHardcoverId && isVisible ? 30_000 : false,
     gcTime: 5 * 60 * 1000,
   });
-
-  // Check if direct downloads are enabled
-  const { data: directDownloadSettings } = useQuery({
-    queryKey: ['direct-downloads', 'settings'],
-    queryFn: () => directDownloadApi.getSettings(),
-    staleTime: 5 * 60 * 1000, // Cache for 5 minutes
-  });
-  const directDownloadsEnabled = directDownloadSettings?.enabled ?? false;
 
   // Is this book already in the Calibre library (via the metadata-overlay link)?
   const { data: calibre } = useQuery({
@@ -568,37 +560,17 @@ export default function BookDetails() {
 
   const renderActionButtons = (opts?: { hardcoverClassName?: string }) => (
     <>
-      {/* Direct Download button - show when direct downloads enabled */}
-      {canDownload && hasMissingFormat && directDownloadsEnabled && (
-        <Button
-          size="lg"
-          onClick={() => {
-            setSearchFormat(preferredFormat || 'ebook');
-            setSearchSource('direct');
-            setSearchOpen(true);
-          }}
-          className="w-full sm:w-auto h-12 px-6 rounded-xl bg-green-600 hover:bg-green-500 text-white font-medium shadow-lg shadow-green-600/25 transition-[background-color,box-shadow] duration-300 hover:shadow-green-500/40"
-        >
-          <Globe className="h-4 w-4 mr-2" />
-          Direct Download
-        </Button>
-      )}
-
       {/* Prowlarr Download button - show when user can download */}
       {canDownload && hasMissingFormat && (
         <Button
           size="lg"
-          variant={directDownloadsEnabled ? 'outline' : 'default'}
+          variant="default"
           onClick={() => {
             setSearchFormat(preferredFormat || 'ebook');
             setSearchSource('prowlarr');
             setSearchOpen(true);
           }}
-          className={
-            directDownloadsEnabled
-              ? 'w-full sm:w-auto h-12 px-6 rounded-xl border-border/50 hover:bg-card hover:border-primary/30'
-              : 'w-full sm:w-auto h-12 px-6 rounded-xl bg-primary hover:bg-primary/90 text-primary-foreground font-medium shadow-lg shadow-primary/25 transition-[background-color,box-shadow] duration-300 hover:shadow-primary/40'
-          }
+          className="w-full sm:w-auto h-12 px-6 rounded-xl bg-primary hover:bg-primary/90 text-primary-foreground font-medium shadow-lg shadow-primary/25 transition-[background-color,box-shadow] duration-300 hover:shadow-primary/40"
         >
           <Search className="h-4 w-4 mr-2" />
           Search Prowlarr

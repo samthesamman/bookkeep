@@ -2,7 +2,6 @@ import { useState, useEffect } from 'react';
 import { Save, TestTube, CheckCircle, XCircle, Eye, EyeOff, Lock, Plus, Edit, Trash2, RefreshCw, Play, Clock, Database, Link, Shield, Loader2, Mail } from 'lucide-react';
 import ProwlarrSettings from '@/components/settings/ProwlarrSettings';
 import DownloadClientsSettings from '@/components/settings/DownloadClientsSettings';
-import DirectDownloadSettings from '@/components/settings/DirectDownloadSettings';
 import CalibreSettings from '@/components/settings/CalibreSettings';
 import DirectoryPicker from '@/components/settings/DirectoryPicker';
 import { Button } from '@/components/ui/button';
@@ -2235,9 +2234,6 @@ export default function Settings() {
 
           {/* Download Clients Settings */}
           <DownloadClientsSettings />
-
-          {/* Direct Download Settings */}
-          <DirectDownloadSettings />
 
           {/* Calibre Library Settings */}
           <CalibreSettings />

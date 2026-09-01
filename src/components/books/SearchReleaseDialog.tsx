@@ -15,7 +15,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Download, Search, HardDrive, Wifi, BookOpen, Headphones, CheckCircle, RefreshCw, XCircle, ExternalLink, Globe } from 'lucide-react';
 import { DirectDownloadProgress } from '@/components/books/DirectDownloadProgress';
 import { Progress } from '@/components/ui/progress';
-import { downloadsApi, ReleaseInfo, booksApi, directDownloadApi } from '@/lib/api';
+import { downloadsApi, ReleaseInfo, booksApi } from '@/lib/api';
 import { toast } from 'sonner';
 
 interface SearchReleaseDialogProps {
@@ -37,7 +37,7 @@ interface SearchReleaseDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   formatType?: 'ebook' | 'audiobook'; // Optional - defaults to 'ebook' tab
-  sourceFilter?: 'prowlarr' | 'direct'; // Optional - filter by source
+  sourceFilter?: 'prowlarr'; // Optional - filter by source
 }
 
 export function SearchReleaseDialog({
@@ -84,14 +84,6 @@ export function SearchReleaseDialog({
     // Both unavailable, use current activeTab
     return activeTab;
   };
-
-  // Check if direct downloads are enabled
-  const { data: directDownloadSettings } = useQuery({
-    queryKey: ['direct-downloads', 'settings'],
-    queryFn: () => directDownloadApi.getSettings(),
-    staleTime: 5 * 60 * 1000,
-  });
-  const directDownloadsEnabled = directDownloadSettings?.enabled ?? false;
 
   // Ensure book exists in database
   const {
@@ -377,9 +369,6 @@ export function SearchReleaseDialog({
           <h3 className="text-lg font-semibold mb-2">No Releases Found</h3>
           <p className="text-sm text-muted-foreground max-w-md">
             We couldn't find any {formatType} releases for this book.
-            {directDownloadsEnabled
-              ? ' The search includes direct download sources.'
-              : ' Enable direct downloads in Settings for more sources.'}
           </p>
         </div>
       );
@@ -572,29 +561,16 @@ export function SearchReleaseDialog({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Download className="h-5 w-5" />
-            {sourceFilter === 'direct' ? 'Direct Download' : sourceFilter === 'prowlarr' ? 'Download via Prowlarr' : 'Download'} - {book.title}
+            {sourceFilter === 'prowlarr' ? 'Download via Prowlarr' : 'Download'} - {book.title}
           </DialogTitle>
           <DialogDescription className="flex items-center gap-2 flex-wrap">
-            {sourceFilter === 'direct' ? (
-              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-green-500/20 text-green-400 text-xs font-medium border border-green-500/30">
-                <Globe className="h-3 w-3" />
-                Searching direct download sources
-              </span>
-            ) : sourceFilter === 'prowlarr' ? (
+            {sourceFilter === 'prowlarr' ? (
               <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-blue-500/20 text-blue-400 text-xs font-medium border border-blue-500/30">
                 <HardDrive className="h-3 w-3" />
                 Searching Prowlarr indexers
               </span>
             ) : (
-              <>
-                <span>Browse available releases</span>
-                {directDownloadsEnabled && (
-                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-green-500/20 text-green-400 text-xs font-medium border border-green-500/30">
-                    <Globe className="h-3 w-3" />
-                    Direct downloads enabled
-                  </span>
-                )}
-              </>
+              <span>Browse available releases</span>
             )}
           </DialogDescription>
         </DialogHeader>
