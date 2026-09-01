@@ -49,9 +49,9 @@ services:
     # No host port: only the app container needs the database, over the internal
     # Docker network. Uncomment (loopback-bound) only for local admin access.
     ports:
-      - "127.0.0.1:5432:5432"
+      - "5432:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - ./data:/var/lib/postgresql/data
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
