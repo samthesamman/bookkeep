@@ -1,9 +1,11 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from typing import Optional
 import bcrypt
 from app import database, models, schemas
 from app.auth import get_current_user, get_current_user_optional, require_admin
+from app.services import activity
 
 router = APIRouter()
 
@@ -135,7 +137,7 @@ async def get_user(
     return db_user
 
 
-@router.get("/", response_model=list[schemas.UserResponse])
+@router.get("/", response_model=list[schemas.UserWithRequestsResponse])
 async def get_users(
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=1000),
@@ -143,6 +145,22 @@ async def get_users(
     current_user: models.User = Depends(require_admin)
 ):
     users = db.query(models.User).offset(skip).limit(limit).all()
+
+    # Total book requests per user.
+    request_counts = dict(
+        db.query(models.BookRequest.user_id, func.count(models.BookRequest.id))
+        .group_by(models.BookRequest.user_id)
+        .all()
+    )
+    # Trailing-30-day usage from the activity rollup.
+    stats = activity.get_activity_stats(db, days=30)
+
+    for user in users:
+        user.total_requests = request_counts.get(user.id, 0)
+        s = stats.get(user.id)
+        user.active_days_30d = s["active_days"] if s else 0
+        user.activity_events_30d = s["events"] if s else 0
+
     return users
 
 

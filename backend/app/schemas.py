@@ -28,6 +28,7 @@ class UserResponse(UserBase):
     auto_approve_ebooks: Optional[bool] = True
     auto_approve_audiobooks: Optional[bool] = True
     book_delivery_email: Optional[str] = None
+    last_seen_at: Optional[datetime] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
 
@@ -68,6 +69,9 @@ class UserUpdate(BaseModel):
 
 class UserWithRequestsResponse(UserResponse):
     total_requests: Optional[int] = None
+    # Days active / activity pings over the trailing 30 days (see services.activity).
+    active_days_30d: Optional[int] = None
+    activity_events_30d: Optional[int] = None
 
 # Book schemas
 class BookBase(BaseModel):

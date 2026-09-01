@@ -64,6 +64,13 @@ async def get_current_user(
             detail="User account is inactive"
         )
 
+    # Best-effort, throttled usage tracking for the admin Users page.
+    try:
+        from app.services.activity import record_activity
+        record_activity(user.id)
+    except Exception:
+        pass
+
     return user
 
 

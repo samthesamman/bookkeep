@@ -519,6 +519,10 @@ export interface ApiUser {
   auto_approve_ebooks: boolean;
   auto_approve_audiobooks: boolean;
   book_delivery_email?: string | null;
+  last_seen_at?: string | null;
+  total_requests?: number;
+  active_days_30d?: number;
+  activity_events_30d?: number;
   created_at: string;
   updated_at?: string;
 }

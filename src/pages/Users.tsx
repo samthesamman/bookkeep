@@ -1,4 +1,5 @@
 import { useState, useMemo } from 'react';
+import { formatDistanceToNow } from 'date-fns';
 import { Users as UsersIcon, Plus, Edit, Trash2, Shield, User as UserIcon, Search, KeyRound, ChevronLeft, ChevronRight } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -50,8 +51,18 @@ interface User {
   auto_approve_audiobooks?: boolean;
   auto_approve_physical?: boolean;
   total_requests?: number;
+  last_seen_at?: string | null;
+  active_days_30d?: number;
+  activity_events_30d?: number;
   created_at: string;
 }
+
+/** Users seen within the last N days, based on last_seen_at. */
+const isActiveWithinDays = (lastSeenAt: string | null | undefined, days: number) => {
+  if (!lastSeenAt) return false;
+  const seen = new Date(lastSeenAt).getTime();
+  return Number.isFinite(seen) && Date.now() - seen <= days * 24 * 60 * 60 * 1000;
+};
 
 const PAGE_SIZE = 10;
 
@@ -266,7 +277,7 @@ export default function Users() {
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
         <div className="p-4 rounded-lg bg-card border border-border">
           <p className="text-sm text-muted-foreground">Total Users</p>
           <p className="text-3xl font-bold text-foreground mt-1">{users.length}</p>
@@ -278,9 +289,15 @@ export default function Users() {
           </p>
         </div>
         <div className="p-4 rounded-lg bg-card border border-border">
-          <p className="text-sm text-muted-foreground">Active Users</p>
+          <p className="text-sm text-muted-foreground">Enabled Accounts</p>
           <p className="text-3xl font-bold text-success mt-1">
             {users.filter((u) => u.is_active).length}
+          </p>
+        </div>
+        <div className="p-4 rounded-lg bg-card border border-border">
+          <p className="text-sm text-muted-foreground">Active This Week</p>
+          <p className="text-3xl font-bold text-foreground mt-1">
+            {users.filter((u) => isActiveWithinDays(u.last_seen_at, 7)).length}
           </p>
         </div>
         <div className="p-4 rounded-lg bg-card border border-border">
@@ -326,6 +343,7 @@ export default function Users() {
                 <TableHead className="text-muted-foreground">Email</TableHead>
                 <TableHead className="text-muted-foreground">Role</TableHead>
                 <TableHead className="text-muted-foreground">Requests</TableHead>
+                <TableHead className="text-muted-foreground">Last Active</TableHead>
                 <TableHead className="text-muted-foreground">Auto-Approve</TableHead>
                 <TableHead className="text-muted-foreground">Status</TableHead>
                 <TableHead className="text-right text-muted-foreground">Actions</TableHead>
@@ -366,6 +384,22 @@ export default function Users() {
                     )}
                   </TableCell>
                   <TableCell className="text-foreground">{user.total_requests || 0}</TableCell>
+                  <TableCell>
+                    {user.last_seen_at ? (
+                      <div>
+                        <p className="text-sm text-foreground">
+                          {formatDistanceToNow(new Date(user.last_seen_at), { addSuffix: true })}
+                        </p>
+                        {typeof user.active_days_30d === 'number' && user.active_days_30d > 0 && (
+                          <p className="text-xs text-muted-foreground">
+                            {user.active_days_30d}/30 days active
+                          </p>
+                        )}
+                      </div>
+                    ) : (
+                      <span className="text-xs text-muted-foreground">Never</span>
+                    )}
+                  </TableCell>
                   <TableCell>
                     <div className="flex flex-col gap-1">
                       {user.auto_approve_ebooks && (

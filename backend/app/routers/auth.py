@@ -80,6 +80,15 @@ def login(
     # Successful auth: clear this IP's failed-attempt budget.
     login_limiter.reset(f"login:{client_ip}")
 
+    # Record the login as activity (throttle is keyed per user, so this also
+    # freshens last_seen_at immediately on sign-in).
+    try:
+        from app.services.activity import record_activity, _last_recorded
+        _last_recorded.pop(user.id, None)
+        record_activity(user.id)
+    except Exception:
+        pass
+
     # Create and return JWT tokens
     return create_tokens(
         user_id=user.id,

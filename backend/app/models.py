@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, Text, ForeignKey, Float, BigInteger, false
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, Date, Text, ForeignKey, Float, BigInteger, false
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.database import Base
@@ -22,10 +22,35 @@ class User(Base):
     auto_approve_audiobooks = Column(Boolean, default=True)
     # Address used when the user emails a downloaded book to themselves
     book_delivery_email = Column(String, nullable=True)
+    # Last time this user made an authenticated request (throttled write; see
+    # services.activity). Powers the "last active" / usage stats on the admin
+    # Users page.
+    last_seen_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
-    
+
     requests = relationship("BookRequest", back_populates="user")
+    activity_days = relationship(
+        "UserActivityDay", back_populates="user", cascade="all, delete-orphan"
+    )
+
+
+class UserActivityDay(Base):
+    """One row per user per UTC day they were active.
+
+    ``request_count`` is incremented once per throttled activity ping (~1 per
+    5 minutes of active use), so it is a coarse engagement measure, not a raw
+    request count. Rows accumulate; prune with a scheduled job if needed.
+    """
+    __tablename__ = "user_activity_days"
+
+    user_id = Column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    day = Column(Date, primary_key=True, index=True)
+    request_count = Column(Integer, nullable=False, server_default="0", default=0)
+
+    user = relationship("User", back_populates="activity_days")
 
 class Book(Base):
     __tablename__ = "books"
