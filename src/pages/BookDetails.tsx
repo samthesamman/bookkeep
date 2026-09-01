@@ -587,7 +587,7 @@ export default function BookDetails() {
             </span>
           )}
         </div>
-        <div className="flex flex-col sm:flex-row sm:flex-wrap gap-2">
+        <div>
           <Button
             asChild
             className="w-full sm:w-auto h-11 px-5 rounded-xl bg-violet-600 hover:bg-violet-500 text-white font-medium shadow-lg shadow-violet-600/25 transition-[background-color,box-shadow] duration-300 hover:shadow-violet-500/40"
@@ -598,20 +598,23 @@ export default function BookDetails() {
             </a>
           </Button>
           {dbBook?.audiobookshelf_id && (
-            <Button
-              variant="outline"
-              className="w-full sm:w-auto h-11 px-5 rounded-xl"
-              disabled={downloadingAudiobook}
-              title="Download the audiobook files (a zip when there are several)"
-              onClick={handleAudiobookDownload}
-            >
-              {downloadingAudiobook ? (
-                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-              ) : (
-                <Download className="h-4 w-4 mr-2" />
-              )}
-              Download
-            </Button>
+            <div className="flex flex-col sm:flex-row sm:flex-wrap gap-2 mt-6">
+              <Button
+                variant="outline"
+                size="sm"
+                className="w-full sm:w-auto"
+                disabled={downloadingAudiobook}
+                title="Download the audiobook files (a zip when there are several)"
+                onClick={handleAudiobookDownload}
+              >
+                {downloadingAudiobook ? (
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                ) : (
+                  <Download className="h-4 w-4 mr-2" />
+                )}
+                Download
+              </Button>
+            </div>
           )}
         </div>
       </div>

@@ -920,7 +920,25 @@ async def download_library_item(
             detail="Audiobookshelf is not configured",
         )
 
-    url = f"{server.url.rstrip('/')}/api/items/{item_id}/download"
+    # A single-file audiobook is served as that file; only zip when there's more
+    # than one. `/api/items/:id/download` always zips, so for the single-file
+    # case download that one library file directly instead.
+    base = f"{server.url.rstrip('/')}/api/items/{item_id}"
+    raw = await _fetch_abs_item(server, item_id)
+    audio_files = ((raw or {}).get("media") or {}).get("audioFiles") or []
+    single_ino = (
+        audio_files[0].get("ino")
+        if len(audio_files) == 1 and audio_files[0].get("ino")
+        else None
+    )
+    fallback_name = f"audiobook-{item_id}.zip"
+    if single_ino:
+        url = f"{base}/file/{single_ino}/download"
+        meta = audio_files[0].get("metadata") or {}
+        fallback_name = meta.get("filename") or f"audiobook-{item_id}{meta.get('ext') or ''}"
+    else:
+        url = f"{base}/download"
+
     client = httpx.AsyncClient(timeout=None, follow_redirects=True, verify=False)
     try:
         request = client.build_request("GET", url, headers=_auth_headers(server))
@@ -949,12 +967,12 @@ async def download_library_item(
             await client.aclose()
 
     passthrough: Dict[str, str] = {}
-    for header in ("content-disposition", "content-length"):
-        if header in upstream.headers:
-            passthrough[header] = upstream.headers[header]
-    passthrough.setdefault(
-        "content-disposition", f'attachment; filename="audiobook-{item_id}.zip"'
-    )
+    if "content-length" in upstream.headers:
+        passthrough["content-length"] = upstream.headers["content-length"]
+    disposition = upstream.headers.get("content-disposition", "")
+    if not disposition.lower().startswith("attachment"):
+        disposition = f'attachment; filename="{fallback_name}"'
+    passthrough["content-disposition"] = disposition
 
     return StreamingResponse(
         body(),
