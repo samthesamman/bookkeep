@@ -12,7 +12,7 @@ from sqlalchemy import func, or_
 from app import schemas, cache, database, models
 from app.models import Book, Series
 from app.auth import require_admin
-from app.services.text_match import is_derivative_title
+from app.services.text_match import authors_match, is_derivative_title, titles_match
 
 logger = structlog.get_logger()
 
@@ -842,6 +842,11 @@ async def lookup_book_by_title_author(title: str, author: str = None, db: Sessio
     Search for a book on Hardcover by title and optionally author.
     Returns the best match or None if not found.
     """
+    # Placeholder author strings (from Calibre / Audiobookshelf rows with no real
+    # author) only pollute the search and can't be matched against — drop them.
+    if author and author.strip().lower() in {"unknown author", "unknown", "n/a", "", "various", "various authors"}:
+        author = None
+
     search_query = title
     if author:
         search_query = f"{title} {author}"
@@ -864,44 +869,48 @@ async def lookup_book_by_title_author(title: str, author: str = None, db: Sessio
         def _doc_authors(doc: dict) -> str:
             names = list(doc.get("author_names") or [])
             for contrib in doc.get("contributions") or []:
-                name = (contrib.get("author") or {}).get("name")
+                if isinstance(contrib, dict):
+                    name = (contrib.get("author") or {}).get("name")
+                else:
+                    name = contrib
                 if name:
-                    names.append(name)
-            return " ".join(names)
+                    names.append(str(name))
+            return ", ".join(names)
 
+        # Rank the top hits: a hit whose title *and* author line up wins outright;
+        # otherwise fall back to the best title-only match (Hardcover returns
+        # results in relevance order, so the first such hit is the safest guess).
+        # A hit whose title doesn't match at all is never accepted — that's what
+        # produced "Summary of X" / wrong-book matches.
         matched_id = None
-        author_mismatch_id = None
+        title_only_id = None
         for hit in hits[:10]:
             doc = hit.get("document", {})
             if not doc or not doc.get("id"):
                 continue
 
             got_title = doc.get("title") or ""
-            # Never accept a "Summary of…" / "Workbook for…" style companion work
-            # when the caller asked for the original book — this is the main
-            # source of false-positive matches from Hardcover search.
             if is_derivative_title(title, got_title):
                 logger.info("hardcover_search_skip_derivative",
                             search=search_query, candidate=got_title)
                 continue
-
-            book_id = int(doc["id"])
-            if author and author.lower() not in _doc_authors(doc).lower():
-                # Wrong author — only fall back to this if nothing better turns up.
-                if author_mismatch_id is None:
-                    author_mismatch_id = book_id
+            if not titles_match(title, got_title):
                 continue
 
-            matched_id = book_id
-            logger.info("hardcover_search_match_found",
-                        search=search_query,
-                        matched_id=book_id,
-                        matched_title=got_title)
-            break
+            book_id = int(doc["id"])
+            if not author or authors_match(author, _doc_authors(doc)):
+                matched_id = book_id
+                logger.info("hardcover_search_match_found",
+                            search=search_query, matched_id=book_id,
+                            matched_title=got_title)
+                break
+            if title_only_id is None:
+                title_only_id = book_id
 
-        matched_id = matched_id or author_mismatch_id
+        matched_id = matched_id or title_only_id
         if matched_id is None:
-            logger.warning("hardcover_search_no_match", search=search_query)
+            logger.warning("hardcover_search_no_match",
+                           search=search_query, author=author)
             return None
 
         # Fetch full book details using the ID

@@ -73,5 +73,36 @@ def titles_match(wanted: str, got: str) -> bool:
             return False
         return True
 
+    # A one-word wanted title ("Dune", "Recursion", "1984") matches a
+    # "<Title>: <subtitle>" candidate only when the candidate's main title is
+    # exactly that word — never on a shared word alone ("Dune" vs "Dune Messiah").
+    if ":" in got and len(tw) < 2 and _main(got) == tw:
+        return True
+
     # Otherwise require a strong overlap across the full titles.
     return len(tw & tg) / len(tw | tg) >= 0.7
+
+
+def _name_parts(text: str) -> list[str]:
+    cleaned = re.sub(r"[^a-z0-9 ]", " ", (text or "").lower())
+    return [w for w in cleaned.split() if len(w) > 1]
+
+
+def authors_match(wanted: str, got: str) -> bool:
+    """True when author string ``got`` plausibly names ``wanted``.
+
+    Tolerates "Last, First" ordering, initials vs. spelled-out names, punctuation,
+    and extra co-authors / narrators on either side — ``got`` is often a joined
+    list of every contributor Hardcover has for the edition.
+    """
+    w, g = _name_parts(wanted), _name_parts(got)
+    if not w or not g:
+        return False
+    wset, gset = set(w), set(g)
+    # Every word of the wanted name appears in the candidate (reordering,
+    # "Last, First", extra middle names or co-authors on the candidate side).
+    if wset <= gset:
+        return True
+    # Otherwise: at least two shared name parts, one of them an end-name (surname).
+    common = wset & gset
+    return len(common) >= 2 and (w[-1] in gset or g[-1] in wset)

@@ -1,7 +1,7 @@
-"""Tests for app.services.text_match.titles_match."""
+"""Tests for app.services.text_match."""
 import pytest
 
-from app.services.text_match import is_derivative_title, titles_match
+from app.services.text_match import authors_match, is_derivative_title, titles_match
 
 _NO_BAD_PARTS = (
     "No Bad Parts: Healing Trauma and Restoring Wholeness "
@@ -21,6 +21,14 @@ _NO_BAD_PARTS = (
         ("Atomic Habits", "Atomic Habits: An Easy & Proven Way to Build Good Habits", True),
         # series prefix
         ("The Final Empire", "Mistborn: The Final Empire", True),
+        # one-word wanted title vs. "<Title>: <subtitle>" candidate
+        ("Recursion", "Recursion: A Novel", True),
+        ("1984", "1984: Nineteen Eighty-Four", True),
+        ("Dune", "Dune: A Novel", True),
+        # ...but not on a shared word alone
+        ("Dune", "Dune and Other Stories", False),
+        # audiobook title carrying series / "Book N" junk
+        ("Words of Radiance: Book Two of the Stormlight Archive", "Words of Radiance", True),
         # long "Main: subtitle" wanted title
         (_NO_BAD_PARTS, "No Bad Parts", True),
         (_NO_BAD_PARTS, _NO_BAD_PARTS, True),
@@ -65,3 +73,24 @@ def test_titles_match(wanted, got, expected):
 )
 def test_is_derivative_title(wanted, got, expected):
     assert is_derivative_title(wanted, got) is expected
+
+
+@pytest.mark.parametrize(
+    "wanted, got, expected",
+    [
+        ("Andy Weir", "Andy Weir", True),
+        ("J.R.R. Tolkien", "J. R. R. Tolkien", True),  # initials vs. spaced
+        ("James S. A. Corey", "James S.A. Corey", True),
+        ("Brandon Sanderson", "Robert Jordan, Brandon Sanderson", True),  # co-authors
+        ("Stephen King", "Stephen King, Owen King", True),
+        ("Neil Gaiman, Terry Pratchett", "Neil Gaiman", True),  # narrower candidate
+        ("Duran, Gil", "Gil Duran", True),  # "Last, First"
+        # mismatches — caller falls back to a title-only match instead
+        ("Andy Weir", "", False),
+        ("Samuel Clemens", "Mark Twain", False),
+        ("J.K. Rowling", "Jack London", False),
+        ("Brandon Sanderson", "Brandon Mull", False),
+    ],
+)
+def test_authors_match(wanted, got, expected):
+    assert authors_match(wanted, got) is expected
