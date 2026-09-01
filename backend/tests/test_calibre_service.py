@@ -132,3 +132,59 @@ def test_format_file_unavailable(library):
 
 def test_format_file_rejects_path_traversal(library):
     assert cs.format_file(library, 1, "../../../etc/passwd") is None
+
+
+# --- book matching -------------------------------------------------------------
+
+_MATCH_DATA = """
+INSERT INTO books VALUES (10,'The Silmarillion','Silmarillion, The','2024','1977',1.0,'Tolkien, J.R.R.','x',0);
+INSERT INTO books VALUES (20,'The Gift','Gift, The','2024','2007',1.0,'Croggon, Alison','y',0);
+INSERT INTO books VALUES (21,'The Gift','Gift, The','2024','2008',1.0,'Ahern, Cecelia','z',0);
+INSERT INTO authors VALUES (10,'J.R.R. Tolkien','Tolkien, J.R.R.'),(20,'Alison Croggon','Croggon, Alison'),
+  (21,'Cecelia Ahern','Ahern, Cecelia');
+INSERT INTO books_authors_link VALUES (10,10,10),(20,20,20),(21,21,21);
+INSERT INTO identifiers VALUES (10,10,'isbn','9780618391110');
+"""
+
+
+@pytest.fixture
+def match_library(tmp_path):
+    lib = tmp_path / "Match Library"
+    lib.mkdir()
+    conn = sqlite3.connect(lib / "metadata.db")
+    conn.executescript(_SCHEMA)
+    conn.executescript(_MATCH_DATA)
+    conn.commit()
+    conn.close()
+    return str(lib)
+
+
+def test_match_exact_title_and_author(match_library):
+    assert cs.find_book_match(match_library, "The Silmarillion", "J.R.R. Tolkien") == 10
+
+
+def test_match_by_isbn_ignores_title(match_library):
+    assert cs.find_book_match(match_library, "Totally Wrong Title", None, "978-0-618-39111-0") == 10
+
+
+def test_match_same_title_different_author_uses_author_as_tiebreak(match_library):
+    assert cs.find_book_match(match_library, "The Gift", "Cecelia Ahern") == 21
+    assert cs.find_book_match(match_library, "The Gift", "Alison Croggon") == 20
+
+
+def test_match_ignores_placeholder_author(tmp_path):
+    # A Calibre book credited to "Unknown" must still match on a short title -
+    # the placeholder author is treated as "no author", so it neither scores nor
+    # disqualifies the match the way a real, different author would.
+    lib = tmp_path / "ph"
+    lib.mkdir()
+    conn = sqlite3.connect(lib / "metadata.db")
+    conn.executescript(_SCHEMA)
+    conn.executescript(
+        "INSERT INTO books VALUES (5,'Beowulf','Beowulf','2024','1000',1.0,'Unknown','p',0);"
+        "INSERT INTO authors VALUES (5,'Unknown','Unknown');"
+        "INSERT INTO books_authors_link VALUES (5,5,5);"
+    )
+    conn.commit()
+    conn.close()
+    assert cs.find_book_match(str(lib), "Beowulf", "Maria Dahvana Headley") == 5

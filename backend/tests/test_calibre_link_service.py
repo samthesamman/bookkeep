@@ -238,7 +238,7 @@ def test_overlay_title_author_only_win_when_locked(db):
     link = cls.upsert_link(db, calibre_book_id=20, book_id=b.id, source="manual", confirmed=True)
     base = {"id": 20, "title": "Wrong Calibre Title", "authors": "Calibre Author"}
 
-    # Not locked → Calibre's file identity wins.
+    # Not locked, no resolved identity → Calibre's file identity wins.
     out = cls.overlay_book_dict(base, link)
     assert out["title"] == "Wrong Calibre Title"
     assert out["authors"] == "Calibre Author"
@@ -249,3 +249,17 @@ def test_overlay_title_author_only_win_when_locked(db):
     out = cls.overlay_book_dict(base, link)
     assert out["title"] == "Corrected Title"
     assert out["authors"] == "Real Author"
+
+
+def test_overlay_prefers_book_identity_once_hardcover_resolved(db):
+    # A Book row that resolved to a Hardcover record has a vetted title/author,
+    # so it wins over Calibre's (here swapped) file metadata without needing lock.
+    b = _book(db, title="The Way of Kings", author="Brandon Sanderson")
+    b.hardcover_id = 12345
+    db.commit()
+    link = cls.upsert_link(db, calibre_book_id=20, book_id=b.id, source="fuzzy")
+    base = {"id": 20, "title": "Brandon Sanderson", "authors": "The Way of Kings"}
+
+    out = cls.overlay_book_dict(base, link)
+    assert out["title"] == "The Way of Kings"
+    assert out["authors"] == "Brandon Sanderson"

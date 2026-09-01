@@ -220,8 +220,19 @@ def overlay_book_dict(
             return local
         return _pick(local, calibre_val, False)
 
-    out["title"] = field(book.title, out.get("title")) or out.get("title")
-    out["authors"] = field(book.author, out.get("authors")) or out.get("authors")
+    # Identity (title/author): once a Book row has resolved to a Hardcover record
+    # its title/author are vetted, so trust them over Calibre's embedded file
+    # metadata (frequently wrong, and sometimes title/author are swapped). A
+    # "Calibre only" book (no hardcover_id) still shows Calibre's own identity.
+    identity_local = authoritative or bool(getattr(book, "hardcover_id", None))
+
+    def identity(local, calibre_val):
+        if identity_local:
+            return local or calibre_val
+        return _pick(local, calibre_val, False)
+
+    out["title"] = identity(book.title, out.get("title")) or out.get("title")
+    out["authors"] = identity(book.author, out.get("authors")) or out.get("authors")
     out["rating"] = field(book.rating, out.get("rating"))
     out["series"] = field(book.series, out.get("series"))
     out["series_index"] = field(book.series_position, out.get("series_index"))
@@ -373,7 +384,7 @@ def _book_index(db: Session):
             (
                 bid,
                 calibre_service._title_tokens(title or ""),
-                {w for w in calibre_service._norm(author or "").split() if len(w) > 1},
+                calibre_service._author_tokens(author or ""),
             )
         )
     return isbn_map, catalog
@@ -388,7 +399,7 @@ def _match_calibre_book(
     want_title = calibre_service._title_tokens(title or "")
     if not want_title:
         return None
-    want_author = {w for w in calibre_service._norm(author or "").split() if len(w) > 1}
+    want_author = calibre_service._author_tokens(author or "")
     best_id, best = None, -1.0
     for cand_id, cand_title, cand_auth in catalog:
         if not calibre_service._titles_match(want_title, cand_title):

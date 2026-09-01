@@ -365,6 +365,22 @@ def _isbn_key(value: Optional[str]) -> str:
     return "".join(c for c in value.lower() if c.isdigit() or c == "x")
 
 
+# Filler author strings that carry no identity ("Unknown", "Unknown Author",
+# "Various Authors", ...) — treated as "no author" so they neither score nor
+# disqualify a title match.
+_PLACEHOLDER_AUTHOR_TOKENS = {
+    "unknown", "anonymous", "anon", "various", "author", "authors",
+    "na", "none", "unnamed", "unattributed", "uncredited",
+}
+
+
+def _author_tokens(text: str) -> set:
+    toks = {w for w in _norm(text or "").split() if len(w) > 1}
+    if toks and toks <= _PLACEHOLDER_AUTHOR_TOKENS:
+        return set()
+    return toks
+
+
 def _load_catalog(conn) -> tuple[list, dict]:
     """Return (catalog, isbn_map) for the whole library.
 
@@ -384,7 +400,7 @@ def _load_catalog(conn) -> tuple[list, dict]:
         (
             int(r["id"]),
             _title_tokens(r["title"] or ""),
-            {w for w in _norm(f"{r['authors'] or ''} {r['author_sort'] or ''}").split() if len(w) > 1},
+            _author_tokens(f"{r['authors'] or ''} {r['author_sort'] or ''}"),
         )
         for r in rows
     ]
@@ -413,7 +429,7 @@ def _match_against_catalog(
     want_title = _title_tokens(title or "")
     if not want_title:
         return None
-    want_author = {w for w in _norm(author or "").split() if len(w) > 1}
+    want_author = _author_tokens(author or "")
 
     best_id: Optional[int] = None
     best_score = -1.0
