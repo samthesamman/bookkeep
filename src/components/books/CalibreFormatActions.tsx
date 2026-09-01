@@ -88,7 +88,7 @@ export function CalibreFormatActions({
           </Button>
         )}
         <div
-          className={`flex flex-col sm:flex-row sm:flex-wrap gap-2 ${emailFormat ? 'mt-4' : ''}`}
+          className={`flex flex-col sm:flex-row sm:flex-wrap gap-2 ${emailFormat ? 'mt-6' : ''}`}
         >
           {formats.map((fmt) => (
             <Button
