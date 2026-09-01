@@ -305,7 +305,9 @@ export default function BookDetails() {
   const canRequestEbook = Boolean(user?.can_request_ebook) && !ebookAvailable;
   const canRequestAudiobook = Boolean(user?.can_request_audiobook) && !audiobookAvailable;
   const canRequestAnything = canRequestEbook || canRequestAudiobook;
-  const canDownload = Boolean(user?.can_download);
+  // The Prowlarr search/download flow is admin-only, regardless of the
+  // can_download permission flag.
+  const canDownload = isAdmin && Boolean(user?.can_download);
   const hasMissingFormat = !ebookAvailable || !audiobookAvailable;
   const preferredFormat =
     ebookAvailable && !audiobookAvailable
