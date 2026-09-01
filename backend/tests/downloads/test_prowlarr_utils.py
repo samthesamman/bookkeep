@@ -5,6 +5,7 @@ Tests format detection, language detection, and helper functions.
 """
 import pytest
 from app.downloads.prowlarr.utils import (
+    ebook_format_acceptable,
     extract_format,
     extract_language,
     is_audiobook,
@@ -15,6 +16,41 @@ from app.downloads.prowlarr.utils import (
     AUDIOBOOK_FORMATS,
     EBOOK_FORMATS,
 )
+
+
+class TestEbookFormatAcceptable:
+    """The "epub / azw3 only, no PDFs" download rule for ebook releases."""
+
+    def test_accepts_epub(self):
+        assert ebook_format_acceptable("Great Book - Author [EPUB]") is True
+
+    def test_accepts_azw3(self):
+        assert ebook_format_acceptable("Great Book - Author [AZW3]") is True
+
+    def test_accepts_azw_mobi_kepub(self):
+        assert ebook_format_acceptable("Great Book - Author [AZW]") is True
+        assert ebook_format_acceptable("Great Book - Author.mobi") is True
+        assert ebook_format_acceptable("Great Book - Author.kepub") is True
+
+    def test_rejects_pdf(self):
+        assert ebook_format_acceptable("Great Book - Author [PDF]") is False
+        assert ebook_format_acceptable("Great Book", filename="book.pdf") is False
+
+    def test_rejects_djvu_and_cbr(self):
+        assert ebook_format_acceptable("Great Book - Author.djvu") is False
+        assert ebook_format_acceptable("Great Comic [CBR]") is False
+
+    def test_accepts_untagged_release(self):
+        # No format hint at all - allowed through (usually contains an epub)
+        assert ebook_format_acceptable("Great Book - Author Name") is True
+        assert ebook_format_acceptable("") is True
+
+    def test_accepts_pack_that_includes_epub(self):
+        assert ebook_format_acceptable("Great Book (EPUB, MOBI, PDF)") is True
+
+    def test_uses_filename_hint(self):
+        assert ebook_format_acceptable("Generic Title", filename="book.epub") is True
+        assert ebook_format_acceptable("Generic Title", filename="book.pdf") is False
 
 
 class TestExtractFormat:
@@ -56,12 +92,10 @@ class TestExtractFormat:
         assert extract_format(None) is None
 
     def test_azw3_format(self):
-        # Note: azw pattern matches azw3 since it comes first in iteration
-        # Both azw and azw3 are detected
-        fmt = extract_format("Book [AZW3]")
-        assert fmt in ("azw", "azw3")  # Either is acceptable
-        fmt = extract_format("book.azw3")
-        assert fmt in ("azw", "azw3")  # Either is acceptable
+        # azw3 is tried before azw so the "AZW" substring in "AZW3" does not win
+        assert extract_format("Book [AZW3]") == "azw3"
+        assert extract_format("book.azw3") == "azw3"
+        assert extract_format("Book [AZW]") == "azw"
 
     def test_case_insensitive(self):
         assert extract_format("book.EPUB") == "epub"

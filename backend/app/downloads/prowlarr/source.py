@@ -11,6 +11,7 @@ from ..import Release, ReleaseSource, register_source
 from .api import ProwlarrClient
 from .utils import (
     AUDIOBOOK_FORMAT_BONUS,
+    ebook_format_acceptable,
     extract_format,
     extract_language,
     is_audiobook,
@@ -285,6 +286,19 @@ class ProwlarrSource(ReleaseSource):
                 "prowlarr_drop_not_ebook",
                 release_title=title,
                 category_ids=category_ids,
+                detected_format=fmt,
+            )
+            return None
+
+        # Ebooks: only download a release that is (or contains) a reflowable
+        # format (epub/azw3/azw/mobi/kepub). Rejects PDF-only / djvu / cbr /
+        # etc. releases; a release whose name gives no format hint is allowed
+        # through.
+        if format_type == "ebook" and not ebook_format_acceptable(title, file_name):
+            logger.info(
+                "prowlarr_drop_unwanted_ebook_format",
+                release_title=title,
+                file_name=file_name,
                 detected_format=fmt,
             )
             return None

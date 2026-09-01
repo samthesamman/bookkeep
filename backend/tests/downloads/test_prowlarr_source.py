@@ -285,6 +285,78 @@ class TestConvertToRelease:
 
         assert release is None
 
+    def test_convert_rejects_pdf_ebook(self, mock_prowlarr_source):
+        """A PDF-only ebook release is skipped (reflowable formats only)"""
+        prowlarr_result = {
+            "title": "Great Book - Author Name [PDF]",
+            "downloadUrl": "http://download/1",
+            "size": 5242880,
+            "protocol": "torrent",
+            "categories": [{"id": 7000, "name": "Books/Ebook"}],
+        }
+
+        release = mock_prowlarr_source._convert_to_release(prowlarr_result, "ebook")
+
+        assert release is None
+
+    def test_convert_accepts_mobi_ebook(self, mock_prowlarr_source):
+        """MOBI is an allowed ebook format"""
+        prowlarr_result = {
+            "title": "Great Book - Author Name",
+            "fileName": "Great Book - Author Name.mobi",
+            "downloadUrl": "http://download/1",
+            "size": 5242880,
+            "protocol": "torrent",
+            "categories": [{"id": 7000, "name": "Books/Ebook"}],
+        }
+
+        release = mock_prowlarr_source._convert_to_release(prowlarr_result, "ebook")
+
+        assert release is not None
+        assert release.format == "mobi"
+
+    def test_convert_accepts_azw3_ebook(self, mock_prowlarr_source):
+        prowlarr_result = {
+            "title": "Great Book [AZW3]",
+            "downloadUrl": "http://download/1",
+            "size": 5242880,
+            "protocol": "torrent",
+            "categories": [{"id": 7000, "name": "Books/Ebook"}],
+        }
+
+        release = mock_prowlarr_source._convert_to_release(prowlarr_result, "ebook")
+
+        assert release is not None
+        assert release.format == "azw3"
+
+    def test_convert_accepts_multiformat_pack_with_epub(self, mock_prowlarr_source):
+        """A pack that bundles a PDF is fine as long as it also has an epub"""
+        prowlarr_result = {
+            "title": "Great Book - Author Name (EPUB, MOBI, PDF)",
+            "downloadUrl": "http://download/1",
+            "size": 15728640,
+            "protocol": "torrent",
+            "categories": [{"id": 7000, "name": "Books/Ebook"}],
+        }
+
+        release = mock_prowlarr_source._convert_to_release(prowlarr_result, "ebook")
+
+        assert release is not None
+
+    def test_convert_accepts_ebook_with_no_format_hint(self, mock_prowlarr_source):
+        """An untagged ebook release is allowed through (likely contains epub)"""
+        prowlarr_result = {
+            "title": "Great Book - Author Name",
+            "downloadUrl": "http://download/1",
+            "size": 5242880,
+            "protocol": "torrent",
+            "categories": [{"id": 7000, "name": "Books/Ebook"}],
+        }
+
+        release = mock_prowlarr_source._convert_to_release(prowlarr_result, "ebook")
+
+        assert release is not None
+
     def test_convert_detects_format_from_filename(self, mock_prowlarr_source):
         """Format lives in the torrent filename, not the display title"""
         prowlarr_result = {
@@ -427,10 +499,11 @@ class TestQualitySorting:
     """Test that releases are sorted by quality score"""
 
     def test_releases_sorted_by_quality(self, mock_prowlarr_source):
-        # Return releases with different quality indicators
+        # Return releases with different quality indicators. All three formats
+        # (azw3, epub, mobi) are allowed, so all survive the format filter.
         mock_prowlarr_source.client.search_with_retry.return_value = [
             {
-                "title": "Author - The Great Gatsby.pdf",
+                "title": "Author - The Great Gatsby [AZW3]",
                 "downloadUrl": "http://download/1",
                 "size": 100000,  # Very small
                 "protocol": "torrent",

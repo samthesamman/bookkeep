@@ -61,6 +61,20 @@ AUDIOBOOK_FORMAT_BONUS = {
 # Ebook-specific formats
 EBOOK_FORMATS = {"epub", "mobi", "azw", "azw3", "pdf", "lit", "pdb", "fb2", "djvu", "cbr", "cbz", "kepub", "ibooks"}
 
+# Iteration order for extract_format. "azw3" must be tried before "azw" (the
+# "azw" pattern also matches the "AZW3" substring); "kepub" before "epub" for
+# the same reason.
+_EBOOK_FORMAT_PRIORITY = (
+    "kepub", "epub", "azw3", "azw", "mobi", "pdf", "fb2",
+    "lit", "pdb", "djvu", "cbr", "cbz", "ibooks",
+)
+
+# Ebook formats we are willing to download from a torrent search. Anything else
+# a release advertises (PDF above all, but also djvu/cbr/fb2/...) is rejected
+# unless the release *also* names one of these - a multi-format pack that
+# includes a wanted format is still fine.
+ALLOWED_EBOOK_FORMATS = {"epub", "azw3", "azw", "mobi", "kepub"}
+
 
 # Language code mapping (ISO 639-1)
 LANGUAGE_PATTERNS = {
@@ -206,13 +220,54 @@ def extract_format(title: str, filename: Optional[str] = None) -> Optional[str]:
         if pattern and re.search(pattern, text, re.IGNORECASE):
             return fmt
 
-    # Then check ebook formats
-    for fmt in EBOOK_FORMATS:
+    # Then check ebook formats (ordered so "azw3" beats "azw", "kepub" beats "epub")
+    for fmt in _EBOOK_FORMAT_PRIORITY:
         pattern = FORMAT_PATTERNS.get(fmt)
         if pattern and re.search(pattern, text, re.IGNORECASE):
             return fmt
 
     return None
+
+
+def ebook_format_acceptable(title: str, filename: Optional[str] = None) -> bool:
+    """
+    Decide whether an ebook release is safe to download. Wanted formats are
+    ``ALLOWED_EBOOK_FORMATS`` (epub, azw3, azw, mobi, kepub); PDF and the other
+    non-reflowable formats (djvu, cbr, cbz, fb2, lit, pdb, ibooks) are not.
+
+    The release's title and (when Prowlarr exposes it) its file name are the
+    only signals available before the torrent is fetched, so:
+
+    - If either names a wanted format anywhere, accept it - the release *is* or
+      *contains* a wanted format, even if it also bundles a PDF.
+    - Otherwise, if it names some other ebook format (pdf, djvu, ...), reject it.
+    - If no ebook format is named at all, accept it - untagged book torrents
+      almost always contain an epub, and a stray PDF-only release will simply
+      fail to import into Calibre later.
+
+    Args:
+        title: Release title
+        filename: Optional torrent file name
+
+    Returns:
+        True if the release may be downloaded, False to skip it.
+    """
+    text = f"{title or ''} {filename or ''}".strip()
+    if not text:
+        return True
+
+    names_allowed = any(
+        re.search(FORMAT_PATTERNS[fmt], text, re.IGNORECASE)
+        for fmt in ALLOWED_EBOOK_FORMATS
+    )
+    if names_allowed:
+        return True
+
+    names_other_ebook = any(
+        re.search(FORMAT_PATTERNS[fmt], text, re.IGNORECASE)
+        for fmt in EBOOK_FORMATS - ALLOWED_EBOOK_FORMATS
+    )
+    return not names_other_ebook
 
 
 def extract_language(title: str) -> Optional[str]:
