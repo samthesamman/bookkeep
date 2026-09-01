@@ -13,6 +13,7 @@ import { requestsApi, booksApi, calibreApi, audiobookshelfApi } from '@/lib/api'
 import { transformHardcoverBook } from '@/lib/hardcover';
 import { CalibreFormatActions } from '@/components/books/CalibreFormatActions';
 import { CalibreRelinkDialog } from '@/components/books/CalibreRelinkDialog';
+import { AudiobookshelfRelinkDialog } from '@/components/books/AudiobookshelfRelinkDialog';
 import { MetadataSourceDialog } from '@/components/books/MetadataSourceDialog';
 import { toast } from 'sonner';
 import { useUser } from '@/contexts/UserContext';
@@ -29,6 +30,7 @@ export default function BookDetails() {
   const [searchFormat, setSearchFormat] = useState<'ebook' | 'audiobook'>('ebook');
   const [searchSource, setSearchSource] = useState<'prowlarr' | undefined>(undefined);
   const [relinkOpen, setRelinkOpen] = useState(false);
+  const [absRelinkOpen, setAbsRelinkOpen] = useState(false);
   const [sourcesOpen, setSourcesOpen] = useState(false);
   const queryClient = useQueryClient();
   const { user, isAdmin } = useUser();
@@ -51,12 +53,12 @@ export default function BookDetails() {
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key !== 'Escape' || e.defaultPrevented) return;
-      if (requestOpen || searchOpen || relinkOpen || sourcesOpen) return;
+      if (requestOpen || searchOpen || relinkOpen || absRelinkOpen || sourcesOpen) return;
       goBack();
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [goBack, requestOpen, searchOpen, relinkOpen, sourcesOpen]);
+  }, [goBack, requestOpen, searchOpen, relinkOpen, absRelinkOpen, sourcesOpen]);
 
   const { data: book, isLoading, error } = useBookDetails(id);
   const hardcoverId = book?.hardcoverId ?? (book?.id ? Number(book.id) : undefined);
@@ -139,6 +141,23 @@ export default function BookDetails() {
     onSuccess: (_d, action) => {
       invalidateCalibre();
       toast.success(action === 'refresh' ? 'Metadata refreshed' : 'Calibre link removed');
+    },
+    onError: (err: Error) => toast.error('Action failed', { description: err.message }),
+  });
+
+  const invalidateAbs = () => {
+    queryClient.invalidateQueries({ queryKey: ['book', 'by-hardcover', hardcoverId] });
+    queryClient.invalidateQueries({ queryKey: ['hardcover', 'book', id] });
+    queryClient.invalidateQueries({ queryKey: ['audiobookshelf'] });
+  };
+  const absLinkMutation = useMutation({
+    mutationFn: async (action: 'unlink') => {
+      if (!hasHardcoverId || action !== 'unlink') return;
+      return audiobookshelfApi.unlink(hardcoverId as number);
+    },
+    onSuccess: () => {
+      invalidateAbs();
+      toast.success('Audiobookshelf link removed');
     },
     onError: (err: Error) => toast.error('Action failed', { description: err.message }),
   });
@@ -529,6 +548,26 @@ export default function BookDetails() {
             <h2 className="text-sm font-semibold text-foreground">
               {hasLibraryCard ? 'Listen on Audiobookshelf' : 'In your library'}
             </h2>
+          )}
+          {isAdmin && dbBook?.audiobookshelf_id && (
+            <span className="ml-auto flex flex-wrap gap-1">
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={absLinkMutation.isPending}
+                onClick={() => setAbsRelinkOpen(true)}
+              >
+                Change
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={absLinkMutation.isPending}
+                onClick={() => absLinkMutation.mutate('unlink')}
+              >
+                Unlink
+              </Button>
+            </span>
           )}
         </div>
         <Button
@@ -925,6 +964,15 @@ export default function BookDetails() {
           open={relinkOpen}
           onOpenChange={setRelinkOpen}
           onLinked={invalidateCalibre}
+        />
+      )}
+
+      {hasHardcoverId && dbBook?.audiobookshelf_id && (
+        <AudiobookshelfRelinkDialog
+          fromHardcoverId={hardcoverId as number}
+          open={absRelinkOpen}
+          onOpenChange={setAbsRelinkOpen}
+          onLinked={invalidateAbs}
         />
       )}
 

@@ -344,3 +344,67 @@ It's totally understandable if you are anti-AI or if that's just not your cup of
 As a backend-focused Python developer with **many** failed attempts at front end development, I can't express it enough just how helpful it is to offload the cumbersome and mundane parts of this project. 
 
 The backend, API design, database work, and overall system design will remain human.
+
+
+sync_missing_metadata — every 6 h (tasks.py:1838)
+Nothing to do with Calibre. It works on the books table directly and backfills rows that are missing key fields by hitting Hardcover only (not the enrich_book multi-source merge).
+
+It gathers four buckets (tasks.py:1852-1872):
+
+has a hardcover_slug but no numeric hardcover_id
+no cover_url and no hardcover_id (max 50)
+has hardcover_id but no rating (max 50)
+has hardcover_id and a series name/position but no series_id (max 50)
+For each, it looks the book up on Hardcover by slug, then by title/author (tasks.py:1897-1904), skips it if another row already owns that hardcover_id, and otherwise fills hardcover_id, cover, description, page_count, rating, series, genres — fill-only (X or book.X), never overwriting. 0.5 s between calls for rate limiting. This is the job that keeps seed-data / Booklore / Audiobookshelf-imported books from staying half-populated.
+
+reconcile_calibre_library — every 60 s (tasks.py:506)
+The fast loop that treats Calibre as the source of truth for ebook availability. Per run:
+
+Promote parked downloads — reconcile_ebook_library_imports: any ebook download sitting in awaiting_library that Calibre has now indexed flips to imported, the book goes ebook_available, and a confirmed link is written (tasks.py:528).
+Resolve open requests — loads the whole library once, matches every pending/approved/processing/not_found ebook request against it; a hit flips the request to available (however the book got there — download, manual add, side-load) and writes a link (tasks.py:554-606).
+Link-table maintenance, throttled to once per 10 min (tasks.py:539-547): heal_stale_links (re-point/drop links whose Calibre id vanished on a delete+re-add), backfill_fuzzy_links (match still-unlinked library books to existing Book rows), sync_availability_flags (set ebook_available/audiobook_available from Calibre formats).
+Small enrichment slice — _enrich_linked_calibre_books: up to 10 linked books (tasks.py:630) whose overlay metadata (description/cover/genres) has a gap or was never refreshed, filled via Open Library + Hardcover (enrich_book defaults, no Google/Apple).
+Refreshes just-downloaded books, busts the request cache, sends availability emails (tasks.py:611-621).
+sync_calibre_metadata — startup + once a day (tasks.py:800)
+The full sweep version of the same work, gated on a Calibre library being configured and the overlay toggle being on. Three passes, each capped at 400 books/run (tasks.py:640); leftovers wait for the next run or get nibbled by the per-minute batch:
+
+Link — heal_stale_links + backfill_fuzzy_links (same as above, but unthrottled).
+Import unlinked — _import_unlinked_calibre_books (tasks.py:695): for each Calibre book that matches no existing Book row (a side-load you've never seen), create a Book from the Calibre title/author/ISBN, enrich it (Open Library → Hardcover, resolve_hardcover=True), and link it only if something was actually found — otherwise roll back and leave it "metadata from Calibre only". This is the pass that clears that label.
+Enrich linked — _enrich_calibre_metadata with limit 400: refresh linked books whose overlay metadata is absent or stale-incomplete.
+So: reconcile_calibre_library is the minute-by-minute slice (availability + 10-book enrichment), sync_calibre_metadata is the daily deep pass that also does the "create a Book row for side-loaded Calibre books" step, and sync_missing_metadata is unrelated — it patches thin rows in your own books table straight from Hardcover.
+
+
+
+
+when a book is added to calibre, explain to me how the metadata is attached to the book entry. i thought the cover was coming form itunes but i see in my library it looks like most are just using the hardcover metadata for all fields
+
+Short version: bookkeep never writes metadata into Calibre. Calibre imports the downloaded file itself and builds its record from the EPUB's embedded metadata. What you're looking at in My Books / the Calibre detail page is bookkeep's own overlay — a separate Book row's metadata painted on top of the Calibre entry — and that row is populated almost entirely from Hardcover because of which code path fills it.
+
+The flow when a download lands
+The orchestrator copies the file to your Ebook Download Path and parks the task as awaiting_library (orchestrator.py:803). It does not run calibredb — calibre_service.py opens metadata.db read-only and immutable.
+Your external Calibre (calibre-web auto-import, a folder watch, whatever) imports the file and derives its title/author/cover/description from the EPUB's OPF.
+Once a minute, reconcile_ebook_library_imports matches the parked task to the new Calibre book by ISBN/title, flips it to imported, and writes a confirmed link in calibre_book_links (tasks.py:414-425).
+On that state transition — and only then — _refresh_downloaded_books calls enrich_book(..., overwrite=True, use_google=True) (tasks.py:470).
+The cover priority you expected
+book_metadata.py does say cover = Apple Books → Hardcover → Google → Open Library. That's real, but Apple and Google are queried only when use_google=True (book_metadata.py:159-170).
+
+use_google=True happens on exactly these paths:
+
+a freshly downloaded book being promoted (step 4 above)
+admin "Refresh metadata" (calibre.py:537)
+admin linking a Calibre book to a Hardcover record (calibre.py:436) — this also sets metadata_locked=True
+the metadata source picker
+Why most of your library shows Hardcover instead
+The jobs that link and fill metadata for books you didn't just download all call enrich_book(db, book) with the defaults — use_google=False, overwrite=False:
+
+sync_calibre_metadata (daily full sweep) → heal_and_backfill
+reconcile_calibre_library (per-minute) → books_missing_metadata → tasks.py:668
+With use_google=False, Apple's iTunes API is never contacted — only Open Library + Hardcover. And overwrite=False means an existing cover is never replaced. So:
+
+Books created by refresh_seed_data, Booklore sync (tasks.py:1228), or Audiobookshelf sync get cover_url set straight from Hardcover's cached_image at creation, and the gap-fill enrichment never touches it again.
+Books first linked by the fuzzy backfill sweep get their gaps filled from Open Library → Hardcover; OL rarely has a usable cover, so it resolves to Hardcover.
+Even on the Apple-enabled paths, a Book row with no ISBN (seed data never sets one) forces Apple into a title/author search that must pass titles_match and have artwork (applebooks_metadata.py:124-130); misses fall through to Hardcover.
+What the UI actually renders
+overlay_book_dict sets overlay_cover_url = book.cover_url, and the frontend uses that first, falling back to Calibre's embedded cover.jpg only when the Book row has no cover (MyBooks.tsx:39-44, CalibreBookDetails.tsx:179). If the linked book has a hardcover_id, the page redirects to /book/:hardcoverId (CalibreBookDetails.tsx:139), which just shows Book.cover_url directly.
+
+To get iTunes covers on existing books: run the admin "Refresh metadata" action (or re-link) on them — that's the only way to trigger the use_google=True merge with overwrite=True after the fact. If you want it to be the default for the background sweeps, sync_calibre_metadata / heal_and_backfill would need to pass use_google=True (at the cost of Google's daily quota and Apple's ~20 req/min limit across your whole library).

@@ -1,6 +1,7 @@
 """Audiobookshelf API integration for audiobook availability"""
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import Response
+from pydantic import BaseModel
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 from typing import Optional, Dict, Any, List
@@ -518,6 +519,117 @@ async def get_web_url(
     """
     server = get_default_audiobookshelf_server(db)
     return {"url": get_audiobookshelf_web_url(server) if server else None}
+
+
+# ---------------------------------------------------------------------------
+# Manually re-point / clear the Audiobookshelf link on a catalog book.
+#
+# The link is a single unique column (``Book.audiobookshelf_id``). "Change"
+# moves that id from the book it's on to a different Hardcover book; "Unlink"
+# just clears it. Mirrors the Calibre re-link controls on the book detail page.
+# ---------------------------------------------------------------------------
+class AbsLinkRequest(BaseModel):
+    from_hardcover_id: int  # book that currently holds the Audiobookshelf id
+    to_hardcover_id: int  # book to move the link to
+
+
+class AbsLinkResponse(BaseModel):
+    audiobookshelf_id: Optional[str]
+    linked_book_id: int
+    hardcover_id: Optional[int]
+    audiobook_available: bool
+
+
+async def _resolve_book_for_hardcover(hardcover_id: int, db: Session) -> models.Book:
+    """The catalog Book for a Hardcover id, creating it from the API if needed."""
+    book = (
+        db.query(models.Book)
+        .filter(models.Book.hardcover_id == hardcover_id)
+        .first()
+    )
+    if book is not None:
+        return book
+
+    from app.routers.settings import get_hardcover_token
+    from app.tasks import _ensure_book_in_db
+
+    token, _src = get_hardcover_token(db)
+    if not token:
+        raise HTTPException(status_code=400, detail="Hardcover API token is not configured")
+    book = await _ensure_book_in_db(hardcover_id, token, db)
+    if book is None:
+        raise HTTPException(status_code=404, detail="Book not found on Hardcover")
+    return book
+
+
+@router.put("/link", response_model=AbsLinkResponse)
+async def relink_audiobookshelf_item(
+    body: AbsLinkRequest,
+    db: Session = Depends(database.get_db),
+    _: models.User = Depends(require_admin),
+):
+    """Move the Audiobookshelf item currently linked to one book onto another."""
+    source = (
+        db.query(models.Book)
+        .filter(models.Book.hardcover_id == body.from_hardcover_id)
+        .first()
+    )
+    if source is None or not source.audiobookshelf_id:
+        raise HTTPException(status_code=404, detail="No linked Audiobookshelf item to move")
+
+    if body.to_hardcover_id == body.from_hardcover_id:
+        raise HTTPException(status_code=400, detail="Already linked to this book")
+
+    item_id = source.audiobookshelf_id
+    target = await _resolve_book_for_hardcover(body.to_hardcover_id, db)
+    if target.id == source.id:
+        raise HTTPException(status_code=400, detail="Already linked to this book")
+
+    # `audiobookshelf_id` is unique — free it on the old book (and drop its
+    # audiobook flag so the nightly sync can't re-match it) before reassigning.
+    source.audiobookshelf_id = None
+    source.audiobook_available = False
+    db.flush()
+
+    target.audiobookshelf_id = item_id
+    target.audiobook_available = True
+    db.commit()
+    db.refresh(target)
+
+    logger.info(
+        "audiobookshelf_relinked",
+        item_id=item_id,
+        from_book_id=source.id,
+        to_book_id=target.id,
+    )
+    return AbsLinkResponse(
+        audiobookshelf_id=target.audiobookshelf_id,
+        linked_book_id=target.id,
+        hardcover_id=target.hardcover_id,
+        audiobook_available=bool(target.audiobook_available),
+    )
+
+
+@router.delete("/link/{hardcover_id}")
+async def unlink_audiobookshelf_item(
+    hardcover_id: int,
+    db: Session = Depends(database.get_db),
+    _: models.User = Depends(require_admin),
+):
+    """Clear the Audiobookshelf link on the book with this Hardcover id."""
+    book = (
+        db.query(models.Book)
+        .filter(models.Book.hardcover_id == hardcover_id)
+        .first()
+    )
+    if book is None or not book.audiobookshelf_id:
+        raise HTTPException(status_code=404, detail="No linked Audiobookshelf item")
+
+    book.audiobookshelf_id = None
+    book.audiobook_available = False
+    db.commit()
+    logger.info("audiobookshelf_unlinked", book_id=book.id)
+    return {"removed": True}
 
 
 @router.get("/library/items")

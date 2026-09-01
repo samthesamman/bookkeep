@@ -1018,6 +1018,29 @@ export const audiobookshelfApi = {
     apiRequest<AudiobookshelfResolveResponse>(
       `/api/audiobookshelf/library/items/${encodeURIComponent(itemId)}/resolve`,
     ),
+
+  // Move the Audiobookshelf item linked to one book onto a different Hardcover
+  // book (admin only). Mirrors the Calibre "Change" control.
+  relink: (fromHardcoverId: number, toHardcoverId: number) =>
+    apiRequest<{
+      audiobookshelf_id: string | null;
+      linked_book_id: number;
+      hardcover_id: number | null;
+      audiobook_available: boolean;
+    }>('/api/audiobookshelf/link', {
+      method: 'PUT',
+      body: JSON.stringify({
+        from_hardcover_id: fromHardcoverId,
+        to_hardcover_id: toHardcoverId,
+      }),
+    }),
+
+  // Clear the Audiobookshelf link on the book with this Hardcover id (admin only).
+  unlink: (hardcoverId: number) =>
+    apiRequest<{ removed: boolean }>(
+      `/api/audiobookshelf/link/${hardcoverId}`,
+      { method: 'DELETE' },
+    ),
 };
 
 // Download Settings API endpoints
