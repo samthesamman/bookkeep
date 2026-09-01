@@ -13,6 +13,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { audiobookshelfApi, type AudiobookshelfLibraryItem } from '@/lib/api';
+import { titleSortKey } from '@/lib/utils';
 
 type Sort = 'title' | 'author' | 'added';
 
@@ -161,7 +162,8 @@ export default function MyAudiobooks() {
       : list.slice();
 
     filtered.sort((a, b) => {
-      if (sort === 'title') return a.title.localeCompare(b.title);
+      if (sort === 'title')
+        return titleSortKey(a.title).localeCompare(titleSortKey(b.title));
       if (sort === 'author')
         return (a.author ?? '').localeCompare(b.author ?? '');
       return (b.added_at ?? 0) - (a.added_at ?? 0);

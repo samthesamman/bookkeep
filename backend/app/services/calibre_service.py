@@ -29,8 +29,20 @@ _MEDIA_TYPES = {
     "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 }
 
+# Calibre normally moves leading articles to the end in ``b.sort`` ("The Hobbit"
+# -> "Hobbit, The"), but fall back to stripping them here in case a library's
+# sort values were never regenerated.
+_TITLE_SORT_EXPR = """
+    CASE
+        WHEN b.sort LIKE 'the %' THEN substr(b.sort, 5)
+        WHEN b.sort LIKE 'an %'  THEN substr(b.sort, 4)
+        WHEN b.sort LIKE 'a %'   THEN substr(b.sort, 3)
+        ELSE b.sort
+    END COLLATE NOCASE ASC
+"""
+
 _SORT_COLUMNS = {
-    "title": "b.sort COLLATE NOCASE ASC",
+    "title": _TITLE_SORT_EXPR,
     "author": "b.author_sort COLLATE NOCASE ASC",
     "added": "b.timestamp DESC",
     "pubdate": "b.pubdate DESC",
