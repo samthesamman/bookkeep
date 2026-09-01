@@ -28,7 +28,7 @@ handler.setFormatter(
 )
 root_logger = logging.getLogger()
 root_logger.handlers = [handler]
-root_logger.setLevel(logging.DEBUG)
+root_logger.setLevel(logging.INFO)
 
 # Configure structlog
 structlog.configure(
