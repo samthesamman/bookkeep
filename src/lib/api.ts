@@ -1012,6 +1012,24 @@ export const audiobookshelfApi = {
   coverDataUrl: (itemId: string) =>
     authedDataUrl(`/api/audiobookshelf/library/items/${encodeURIComponent(itemId)}/cover`),
 
+  // Download an item's audio files (single file, or a zip when there are several).
+  // Mints a short-lived, item-scoped token and lets a plain browser navigation
+  // stream the file to disk, rather than a fetch() buffering the whole
+  // (often multi-GB) audiobook in memory. The server's Content-Disposition
+  // names the file.
+  downloadItem: async (itemId: string) => {
+    const path = `/api/audiobookshelf/library/items/${encodeURIComponent(itemId)}`;
+    const { token } = await apiRequest<{ token: string; expires_in: number }>(
+      `${path}/download-token`,
+      { method: 'POST' },
+    );
+    const a = document.createElement('a');
+    a.href = `${API_BASE_URL}${path}/download?token=${encodeURIComponent(token)}`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  },
+
   // Match an ABS item to a catalog book (creating one via Hardcover if needed)
   // so the UI can open its details page.
   resolveItem: (itemId: string) =>
@@ -1515,8 +1533,8 @@ export interface ApplyMetadataResponse {
 
 export type CalibreSort = 'title' | 'author' | 'added' | 'pubdate';
 
-/** Fetch a binary endpoint with the bearer token and return it as a Blob. */
-async function authedBlob(endpoint: string): Promise<Blob> {
+/** Fetch a binary endpoint with the bearer token, refreshing once on a 401. */
+async function authedBinaryResponse(endpoint: string): Promise<Response> {
   const doFetch = (token: string | null) =>
     fetch(`${API_BASE_URL}${endpoint}`, {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
@@ -1532,7 +1550,43 @@ async function authedBlob(endpoint: string): Promise<Blob> {
   if (!response.ok) {
     throw new Error(`Request failed: ${response.status}`);
   }
-  return response.blob();
+  return response;
+}
+
+/** Fetch a binary endpoint with the bearer token and return it as a Blob. */
+async function authedBlob(endpoint: string): Promise<Blob> {
+  return (await authedBinaryResponse(endpoint)).blob();
+}
+
+/** Pull the filename out of a Content-Disposition header, if present. */
+function filenameFromDisposition(header: string | null): string | undefined {
+  if (!header) return undefined;
+  const star = /filename\*=(?:UTF-8'')?([^;]+)/i.exec(header);
+  if (star) {
+    try {
+      return decodeURIComponent(star[1].replace(/^"|"$/g, ''));
+    } catch {
+      /* fall through to the plain form */
+    }
+  }
+  const plain = /filename="?([^";]+)"?/i.exec(header);
+  return plain ? plain[1] : undefined;
+}
+
+/** Fetch a binary endpoint with auth and hand it to the browser as a file download.
+ *  Honours the server's Content-Disposition filename, falling back to the given name. */
+async function authedDownload(endpoint: string, fallbackFilename: string): Promise<void> {
+  const response = await authedBinaryResponse(endpoint);
+  const name =
+    filenameFromDisposition(response.headers.get('Content-Disposition')) || fallbackFilename;
+  const url = URL.createObjectURL(await response.blob());
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 /** Fetch a binary endpoint and return it as a data: URL.
@@ -1578,19 +1632,11 @@ export const calibreApi = {
 
   coverDataUrl: (id: number) => authedDataUrl(`/api/calibre/books/${id}/cover`),
 
-  downloadFormat: async (id: number, format: string, filename?: string) => {
-    const blob = await authedBlob(
+  downloadFormat: (id: number, format: string, filename?: string) =>
+    authedDownload(
       `/api/calibre/books/${id}/download?format=${encodeURIComponent(format)}`,
-    );
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename || `book-${id}.${format.toLowerCase()}`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-  },
+      filename || `book-${id}.${format.toLowerCase()}`,
+    ),
 
   emailBook: (id: number, format: string) =>
     apiRequest<{ success: boolean; message: string; recipient: string }>(

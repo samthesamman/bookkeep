@@ -1,10 +1,10 @@
 """Audiobookshelf API integration for audiobook availability"""
 from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import func
 from sqlalchemy.orm import Session
-from typing import Optional, Dict, Any, List
+from typing import AsyncIterator, Optional, Dict, Any, List
 import asyncio
 import os
 import httpx
@@ -12,6 +12,11 @@ import structlog
 
 from app import database, models, schemas
 from app.auth import get_current_user, require_admin
+from app.jwt import (
+    DOWNLOAD_TOKEN_EXPIRE_SECONDS,
+    create_download_token,
+    verify_download_token,
+)
 
 logger = structlog.get_logger()
 
@@ -858,6 +863,103 @@ async def get_library_item_cover(
         content=response.content,
         media_type=response.headers.get("content-type", "image/jpeg"),
         headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
+def _download_scope(item_id: str) -> str:
+    return f"abs:item:{item_id}"
+
+
+@router.post("/library/items/{item_id}/download-token")
+async def create_download_token_for_item(
+    item_id: str,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    """
+    Mint a short-lived token the browser can put in the download URL, so a plain
+    navigation streams the file straight to disk instead of a fetch() buffering
+    the whole audiobook in memory. The token only works for this one item.
+    """
+    token = create_download_token(
+        current_user.id, current_user.username, current_user.is_admin, _download_scope(item_id)
+    )
+    return {"token": token, "expires_in": DOWNLOAD_TOKEN_EXPIRE_SECONDS}
+
+
+@router.get("/library/items/{item_id}/download")
+async def download_library_item(
+    item_id: str,
+    token: str,
+    db: Session = Depends(database.get_db),
+):
+    """
+    Stream an Audiobookshelf item's audio download to the browser so the API key
+    never leaves the server. Audiobookshelf returns the single audio file when
+    there is only one, otherwise a zip of the item's files. The response is
+    streamed straight through - audiobooks are large and we never buffer them.
+
+    Auth is a scoped `token` query param (from `POST .../download-token`) rather
+    than a bearer header, so the browser can fetch this with a plain navigation.
+    """
+    token_data = verify_download_token(token, _download_scope(item_id))
+    if token_data is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired download token"
+        )
+    user = db.query(models.User).filter(models.User.id == token_data.user_id).first()
+    if not user or not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired download token"
+        )
+
+    server = get_default_audiobookshelf_server(db)
+    if not server:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Audiobookshelf is not configured",
+        )
+
+    url = f"{server.url.rstrip('/')}/api/items/{item_id}/download"
+    client = httpx.AsyncClient(timeout=None, follow_redirects=True, verify=False)
+    try:
+        request = client.build_request("GET", url, headers=_auth_headers(server))
+        upstream = await client.send(request, stream=True)
+    except httpx.RequestError as e:
+        await client.aclose()
+        logger.error("audiobookshelf_download_error", item_id=item_id, error=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY, detail="Audiobookshelf unreachable"
+        )
+
+    if upstream.status_code != 200:
+        await upstream.aclose()
+        await client.aclose()
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Audiobook download not available",
+        )
+
+    async def body() -> AsyncIterator[bytes]:
+        try:
+            async for chunk in upstream.aiter_bytes():
+                yield chunk
+        finally:
+            await upstream.aclose()
+            await client.aclose()
+
+    passthrough: Dict[str, str] = {}
+    for header in ("content-disposition", "content-length"):
+        if header in upstream.headers:
+            passthrough[header] = upstream.headers[header]
+    passthrough.setdefault(
+        "content-disposition", f'attachment; filename="audiobook-{item_id}.zip"'
+    )
+
+    return StreamingResponse(
+        body(),
+        media_type=upstream.headers.get("content-type", "application/octet-stream"),
+        headers=passthrough,
     )
 
 

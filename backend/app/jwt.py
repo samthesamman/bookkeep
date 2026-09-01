@@ -27,6 +27,10 @@ ALGORITHM = "HS256"
 # Token expiration times
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("BOOKKEEP_ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
 REFRESH_TOKEN_EXPIRE_DAYS = int(os.getenv("BOOKKEEP_REFRESH_TOKEN_EXPIRE_DAYS", "7"))
+# Short-lived tokens handed to a plain browser navigation so large files can
+# stream straight to disk (a fetch()/blob download buffers the whole file in
+# memory). Scoped to a single resource; not reusable for anything else.
+DOWNLOAD_TOKEN_EXPIRE_SECONDS = int(os.getenv("BOOKKEEP_DOWNLOAD_TOKEN_EXPIRE_SECONDS", "120"))
 
 
 class TokenData(BaseModel):
@@ -34,7 +38,8 @@ class TokenData(BaseModel):
     user_id: int
     username: str
     is_admin: bool
-    token_type: str = "access"  # "access" or "refresh"
+    token_type: str = "access"  # "access", "refresh" or "download"
+    scope: Optional[str] = None  # resource a "download" token is limited to
 
 
 class TokenResponse(BaseModel):
@@ -73,6 +78,22 @@ def create_refresh_token(user_id: int, username: str, is_admin: bool) -> str:
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
 
+def create_download_token(user_id: int, username: str, is_admin: bool, scope: str) -> str:
+    """Create a short-lived token that grants a browser navigation access to a
+    single download resource identified by ``scope`` (e.g. ``abs:item:<id>``)."""
+    now = datetime.now(timezone.utc)
+    to_encode = {
+        "sub": str(user_id),
+        "username": username,
+        "is_admin": is_admin,
+        "token_type": "download",
+        "scope": scope,
+        "exp": now + timedelta(seconds=DOWNLOAD_TOKEN_EXPIRE_SECONDS),
+        "iat": now,
+    }
+    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+
+
 def create_tokens(user_id: int, username: str, is_admin: bool) -> TokenResponse:
     """Create both access and refresh tokens."""
     access_token = create_access_token(user_id, username, is_admin)
@@ -103,6 +124,7 @@ def decode_token(token: str) -> Optional[TokenData]:
             username=username,
             is_admin=is_admin,
             token_type=token_type,
+            scope=payload.get("scope"),
         )
     except (JWTError, ValueError, TypeError):
         return None
@@ -124,5 +146,17 @@ def verify_refresh_token(token: str) -> Optional[TokenData]:
     if token_data is None:
         return None
     if token_data.token_type != "refresh":
+        return None
+    return token_data
+
+
+def verify_download_token(token: str, scope: str) -> Optional[TokenData]:
+    """Verify a download token and that it was issued for ``scope``."""
+    token_data = decode_token(token)
+    if token_data is None:
+        return None
+    if token_data.token_type != "download":
+        return None
+    if token_data.scope != scope:
         return None
     return token_data

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useParams, Link, useSearchParams, useNavigate, useLocation } from 'react-router-dom';
-import { ArrowLeft, Star, Calendar, BookOpen, Tag, Clock, Users, Headphones, Library, ExternalLink, Trash2, Search, X, Download } from 'lucide-react';
+import { ArrowLeft, Star, Calendar, BookOpen, Tag, Clock, Users, Headphones, Library, ExternalLink, Trash2, Search, X, Download, Loader2 } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -32,6 +32,7 @@ export default function BookDetails() {
   const [relinkOpen, setRelinkOpen] = useState(false);
   const [absRelinkOpen, setAbsRelinkOpen] = useState(false);
   const [sourcesOpen, setSourcesOpen] = useState(false);
+  const [downloadingAudiobook, setDownloadingAudiobook] = useState(false);
   const queryClient = useQueryClient();
   const { user, isAdmin } = useUser();
   const isVisible = usePageVisibility();
@@ -535,6 +536,20 @@ export default function BookDetails() {
     );
   };
 
+  const handleAudiobookDownload = async () => {
+    if (!dbBook?.audiobookshelf_id) return;
+    setDownloadingAudiobook(true);
+    try {
+      await audiobookshelfApi.downloadItem(dbBook.audiobookshelf_id);
+    } catch (error) {
+      toast.error('Audiobook download failed', {
+        description: error instanceof Error ? error.message : undefined,
+      });
+    } finally {
+      setDownloadingAudiobook(false);
+    }
+  };
+
   const renderListenCard = () => {
     if (!listenNowUrl) return null;
     return (
@@ -572,15 +587,33 @@ export default function BookDetails() {
             </span>
           )}
         </div>
-        <Button
-          asChild
-          className="w-full sm:w-auto h-11 px-5 rounded-xl bg-violet-600 hover:bg-violet-500 text-white font-medium shadow-lg shadow-violet-600/25 transition-[background-color,box-shadow] duration-300 hover:shadow-violet-500/40"
-        >
-          <a href={listenNowUrl} target="_blank" rel="noopener noreferrer">
-            <Headphones className="h-4 w-4 mr-2" />
-            Listen Now
-          </a>
-        </Button>
+        <div className="flex flex-col sm:flex-row sm:flex-wrap gap-2">
+          <Button
+            asChild
+            className="w-full sm:w-auto h-11 px-5 rounded-xl bg-violet-600 hover:bg-violet-500 text-white font-medium shadow-lg shadow-violet-600/25 transition-[background-color,box-shadow] duration-300 hover:shadow-violet-500/40"
+          >
+            <a href={listenNowUrl} target="_blank" rel="noopener noreferrer">
+              <Headphones className="h-4 w-4 mr-2" />
+              Listen Now
+            </a>
+          </Button>
+          {dbBook?.audiobookshelf_id && (
+            <Button
+              variant="outline"
+              className="w-full sm:w-auto h-11 px-5 rounded-xl"
+              disabled={downloadingAudiobook}
+              title="Download the audiobook files (a zip when there are several)"
+              onClick={handleAudiobookDownload}
+            >
+              {downloadingAudiobook ? (
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              ) : (
+                <Download className="h-4 w-4 mr-2" />
+              )}
+              Download
+            </Button>
+          )}
+        </div>
       </div>
     );
   };
