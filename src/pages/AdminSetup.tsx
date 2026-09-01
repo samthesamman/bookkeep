@@ -95,7 +95,7 @@ export default function AdminSetup() {
           <div className="mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-full">
             <BookkeepLogo className="h-14 w-14" />
           </div>
-          <CardTitle className="text-2xl">Welcome to Bookkeep</CardTitle>
+          <CardTitle className="text-2xl">Welcome to Bookstore</CardTitle>
           <CardDescription>
             Create your admin account to get started
           </CardDescription>

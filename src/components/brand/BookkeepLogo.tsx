@@ -4,7 +4,7 @@ type BookkeepLogoProps = ImgHTMLAttributes<HTMLImageElement> & {
   title?: string;
 };
 
-export function BookkeepLogo({ title = 'Bookkeep', className, ...props }: BookkeepLogoProps) {
+export function BookkeepLogo({ title = 'Bookstore', className, ...props }: BookkeepLogoProps) {
   return (
     <img
       src="/favicon.svg"

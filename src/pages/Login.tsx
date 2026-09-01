@@ -137,7 +137,7 @@ export default function Login() {
               Welcome back
             </CardTitle>
             <CardDescription className="text-base text-muted-foreground">
-              Sign in to continue to Bookkeep
+              Sign in to continue to Bookstore
             </CardDescription>
           </div>
         </CardHeader>

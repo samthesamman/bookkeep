@@ -63,7 +63,7 @@ export function Sidebar({ variant = 'desktop', className }: SidebarProps) {
           to="/"
           className="text-2xl font-bold tracking-tight text-sidebar-foreground hover:text-primary transition-colors duration-300"
         >
-          Bookkeep
+          Bookstore
         </Link>
       </div>
 
@@ -167,7 +167,7 @@ export function Sidebar({ variant = 'desktop', className }: SidebarProps) {
         <div className="flex items-center gap-2">
           <div className="h-2 w-2 rounded-full bg-primary animate-pulse" />
           <p className="text-sm font-semibold text-sidebar-foreground/80 tracking-wide">
-            Bookkeep <span className="text-primary">{appVersion}</span>
+            Bookstore <span className="text-primary">{appVersion}</span>
           </p>
         </div>
       </div>

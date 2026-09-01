@@ -40,7 +40,7 @@ export function GeocitiesBanner() {
     <div className="geo-panel">
       <div className="geo-marquee" role="marquee">
         <span>
-          &#128218;&#127760; WELCOME TO BOOKKEEP &mdash; MY LIL' CORNER OF THE WEB &#127760;&#128218;
+          &#128218;&#127760; WELCOME TO BOOKSTORE &mdash; MY LIL' CORNER OF THE WEB &#127760;&#128218;
           &nbsp; sign my guestbook! &nbsp; &#9733; &nbsp; new books added ALL the time &nbsp;
           &#9733; &nbsp; best viewed in Netscape Navigator 4.0 &nbsp; &#9733; &nbsp; thanks 4 visiting!!
         </span>
@@ -66,7 +66,7 @@ export function GeocitiesFooter() {
   return (
     <div className="geo-footer">
       <p>
-        This page is powered by <b>Bookkeep</b> and a lot of instant coffee &#9749;
+        This page is powered by <b>Bookstore</b> and a lot of instant coffee &#9749;
       </p>
       <p>
         Best viewed at 800&times;600 &nbsp;|&nbsp; Made with Notepad &nbsp;|&nbsp;
