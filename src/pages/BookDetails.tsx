@@ -408,13 +408,65 @@ export default function BookDetails() {
   const hasActionRegion =
     hasLibraryCard || hasListenCard || hasAnyActionButton || Boolean(book.hardcoverSlug);
 
+  // The "eBook Available" / "Audiobook Available" status is folded into the
+  // library / Listen cards as their heading when those cards are present, so we
+  // only show a standalone badge when there's no card to absorb it.
+  const showEbookBadge = ebookAvailable && !hasLibraryCard;
+  const showAudiobookBadge = audiobookAvailable && !hasListenCard;
+
+  const renderEbookClearButton = () =>
+    isAdmin && dbBook?.id && dbBook.ebook_available ? (
+      <button
+        onClick={() => {
+          if (
+            window.confirm('Clear eBook availability? This will allow you to re-download this book.')
+          ) {
+            clearAvailabilityMutation.mutate({ bookId: dbBook.id, formatType: 'ebook' });
+          }
+        }}
+        className="ml-1 opacity-0 group-hover:opacity-100 transition-opacity p-1 hover:bg-emerald-500/20 rounded-lg"
+        title="Clear eBook availability"
+      >
+        <X className="h-3 w-3 text-emerald-400" />
+      </button>
+    ) : null;
+
+  const renderAudiobookClearButton = () =>
+    isAdmin && dbBook?.id && dbBook.audiobook_available ? (
+      <button
+        onClick={() => {
+          if (
+            window.confirm(
+              'Clear audiobook availability? This will allow you to re-download this book.',
+            )
+          ) {
+            clearAvailabilityMutation.mutate({ bookId: dbBook.id, formatType: 'audiobook' });
+          }
+        }}
+        className="ml-1 opacity-0 group-hover:opacity-100 transition-opacity p-1 hover:bg-violet-500/20 rounded-lg"
+        title="Clear audiobook availability"
+      >
+        <X className="h-3 w-3 text-violet-400" />
+      </button>
+    ) : null;
+
   const renderLibraryCard = () => {
     if (!hasLibraryCard || !calibre) return null;
     return (
       <div className="rounded-xl md:rounded-2xl border border-border/50 bg-card/30 p-4 md:p-5 space-y-4">
-        <div className="flex items-center gap-2">
-          <Library className="h-4 w-4 text-primary" />
-          <h2 className="text-sm font-semibold text-foreground">In your library</h2>
+        <div className="group flex items-center gap-2">
+          {ebookAvailable ? (
+            <>
+              <BookOpen className="h-4 w-4 text-emerald-400" />
+              <h2 className="text-sm font-semibold text-emerald-400">eBook Available</h2>
+              {renderEbookClearButton()}
+            </>
+          ) : (
+            <>
+              <Library className="h-4 w-4 text-primary" />
+              <h2 className="text-sm font-semibold text-foreground">In your library</h2>
+            </>
+          )}
           {isAdmin && (
             <span className="ml-auto flex flex-wrap gap-1">
               <Button
@@ -474,11 +526,18 @@ export default function BookDetails() {
     if (!listenNowUrl) return null;
     return (
       <div className="rounded-xl md:rounded-2xl border border-border/50 bg-card/30 p-4 md:p-5 space-y-3">
-        <div className="flex items-center gap-2">
+        <div className="group flex items-center gap-2">
           <Headphones className="h-4 w-4 text-violet-400" />
-          <h2 className="text-sm font-semibold text-foreground">
-            {hasLibraryCard ? 'Listen on Audiobookshelf' : 'In your library'}
-          </h2>
+          {audiobookAvailable ? (
+            <>
+              <h2 className="text-sm font-semibold text-violet-400">Audiobook Available</h2>
+              {renderAudiobookClearButton()}
+            </>
+          ) : (
+            <h2 className="text-sm font-semibold text-foreground">
+              {hasLibraryCard ? 'Listen on Audiobookshelf' : 'In your library'}
+            </h2>
+          )}
         </div>
         <Button
           asChild
@@ -746,47 +805,26 @@ export default function BookDetails() {
                 </p>
               </div>
 
-              {/* Availability badges */}
-              <div className="flex flex-wrap gap-2">
-                {ebookAvailable && (
-                  <div className="group flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/30">
-                    <BookOpen className="h-3.5 w-3.5 text-emerald-400" />
-                    <span className="text-xs md:text-sm font-medium text-emerald-400">eBook Available</span>
-                    {isAdmin && dbBook?.id && dbBook.ebook_available && (
-                      <button
-                        onClick={() => {
-                          if (window.confirm('Clear eBook availability? This will allow you to re-download this book.')) {
-                            clearAvailabilityMutation.mutate({ bookId: dbBook.id, formatType: 'ebook' });
-                          }
-                        }}
-                        className="ml-1 opacity-0 group-hover:opacity-100 transition-opacity p-1 hover:bg-emerald-500/20 rounded-lg"
-                        title="Clear eBook availability"
-                      >
-                        <X className="h-3 w-3 text-emerald-400" />
-                      </button>
-                    )}
-                  </div>
-                )}
-                {audiobookAvailable && (
-                  <div className="group flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-violet-500/10 border border-violet-500/30">
-                    <Headphones className="h-3.5 w-3.5 text-violet-400" />
-                    <span className="text-xs md:text-sm font-medium text-violet-400">Audiobook Available</span>
-                    {isAdmin && dbBook?.id && dbBook.audiobook_available && (
-                      <button
-                        onClick={() => {
-                          if (window.confirm('Clear audiobook availability? This will allow you to re-download this book.')) {
-                            clearAvailabilityMutation.mutate({ bookId: dbBook.id, formatType: 'audiobook' });
-                          }
-                        }}
-                        className="ml-1 opacity-0 group-hover:opacity-100 transition-opacity p-1 hover:bg-violet-500/20 rounded-lg"
-                        title="Clear audiobook availability"
-                      >
-                        <X className="h-3 w-3 text-violet-400" />
-                      </button>
-                    )}
-                  </div>
-                )}
-              </div>
+              {/* Availability badges — only shown standalone here when there's
+                  no library / Listen card to carry the status as its heading. */}
+              {(showEbookBadge || showAudiobookBadge) && (
+                <div className="flex flex-wrap gap-2">
+                  {showEbookBadge && (
+                    <div className="group flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/30">
+                      <BookOpen className="h-3.5 w-3.5 text-emerald-400" />
+                      <span className="text-xs md:text-sm font-medium text-emerald-400">eBook Available</span>
+                      {renderEbookClearButton()}
+                    </div>
+                  )}
+                  {showAudiobookBadge && (
+                    <div className="group flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-violet-500/10 border border-violet-500/30">
+                      <Headphones className="h-3.5 w-3.5 text-violet-400" />
+                      <span className="text-xs md:text-sm font-medium text-violet-400">Audiobook Available</span>
+                      {renderAudiobookClearButton()}
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Actionable region — library download/email, Listen Now and the
                   request/download buttons. Rendered here near the top; on mobile
