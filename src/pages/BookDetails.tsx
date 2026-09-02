@@ -8,7 +8,12 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { RequestDialog } from '@/components/books/RequestDialog';
 import { SearchReleaseDialog } from '@/components/books/SearchReleaseDialog';
 import { BookCard } from '@/components/books/BookCard';
-import { useBookDetails, useBookPrompts, useSimilarBooks } from '@/hooks/useHardcoverBooks';
+import {
+  useBookDetails,
+  useBookPrompts,
+  useSimilarBooks,
+  useBooksByAuthor,
+} from '@/hooks/useHardcoverBooks';
 import { requestsApi, booksApi, calibreApi, audiobookshelfApi } from '@/lib/api';
 import { transformHardcoverBook } from '@/lib/hardcover';
 import { CalibreFormatActions } from '@/components/books/CalibreFormatActions';
@@ -173,6 +178,11 @@ export default function BookDetails() {
   );
 
   const { data: similarBooks = [] } = useSimilarBooks(
+    hasHardcoverId ? (hardcoverId as number) : undefined,
+    12
+  );
+
+  const { data: authorBooks = [] } = useBooksByAuthor(
     hasHardcoverId ? (hardcoverId as number) : undefined,
     12
   );
@@ -904,6 +914,24 @@ export default function BookDetails() {
             </div>
           </div>
         </div>
+
+        {/* More by this author */}
+        {authorBooks.length > 0 && (
+          <section className="space-y-6">
+            <div>
+              <h2 className="text-2xl font-bold text-foreground tracking-tight">
+                More by {displayAuthor}
+              </h2>
+            </div>
+            <div className="flex gap-4 overflow-x-auto pb-4 scrollbar-hide -mx-2 px-2">
+              {authorBooks.map((authorBook) => (
+                <div key={authorBook.id} className="flex-shrink-0 w-[130px] sm:w-[150px]">
+                  <BookCard book={authorBook} showRating={false} showRequestButton={false} />
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
 
         {/* Related Books — Hardcover's "readers also enjoyed" */}
         {similarBooks.length > 0 && (
