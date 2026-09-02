@@ -13,6 +13,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
+import { HackerTerminal } from './HackerTerminal';
 import { toast } from 'sonner';
 import { useMutation, useQueryClient, useQuery } from '@tanstack/react-query';
 import { requestsApi, booksApi } from '@/lib/api';
@@ -169,6 +170,9 @@ export function RequestDialog({
 
     const formatLabel = selectedFormat === 'both' ? 'eBook and Audiobook' : formatInfo[selectedFormat].label;
     setIsSubmitting(true);
+    // Keep the "hacking" animation on screen long enough to enjoy it, even if
+    // the actual request finishes almost instantly.
+    const minAnimation = new Promise((resolve) => setTimeout(resolve, 3200));
 
     try {
       // Ensure book exists in database
@@ -182,6 +186,8 @@ export function RequestDialog({
       for (const format of formatsToRequest) {
         await createRequestMutation.mutateAsync({ bookId, format });
       }
+
+      await minAnimation;
 
       // Invalidate queries to trigger re-fetch
       queryClient.invalidateQueries({ queryKey: ['requests'] });
@@ -222,7 +228,13 @@ export function RequestDialog({
           </DialogDescription>
         </DialogHeader>
 
-        {isLoading ? (
+        {isSubmitting ? (
+          <div className="py-4">
+            <HackerTerminal
+              label={`acquiring "${book.title.slice(0, 28)}${book.title.length > 28 ? '…' : ''}"`}
+            />
+          </div>
+        ) : isLoading ? (
           <div className="flex items-center justify-center py-8">
             <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
           </div>
