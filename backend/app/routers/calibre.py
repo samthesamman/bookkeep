@@ -419,15 +419,13 @@ async def set_book_link(
     )
 
     # Reflect the library's formats onto the Book so the rest of the app treats
-    # it as owned.
+    # it as owned. (This Calibre library only ever holds ebooks.)
     kinds = {
         calibre_service.classify_format(d["format"])
         for d in (cal.get("format_details") or [])
     }
     if "ebook" in kinds:
         book.ebook_available = True
-    if "audiobook" in kinds:
-        book.audiobook_available = True
     db.commit()
 
     from app.services.book_metadata import enrich_book
@@ -458,7 +456,6 @@ class CalibreByHardcoverResponse(BaseModel):
     link_source: Optional[str]
     link_confirmed: bool
     ebook_formats: list[str]
-    audiobook_formats: list[str]
     format_details: list[dict[str, Any]]
 
 
@@ -492,14 +489,12 @@ async def calibre_book_by_hardcover(
 
     details = cal.get("format_details") or []
     ebook = [d["format"] for d in details if calibre_service.classify_format(d["format"]) == "ebook"]
-    audio = [d["format"] for d in details if calibre_service.classify_format(d["format"]) == "audiobook"]
     return CalibreByHardcoverResponse(
         calibre_book_id=link.calibre_book_id,
         title=cal.get("title"),
         link_source=link.source,
         link_confirmed=bool(link.confirmed),
         ebook_formats=ebook,
-        audiobook_formats=audio,
         format_details=details,
     )
 
@@ -791,8 +786,6 @@ async def apply_metadata(
         }
         if "ebook" in kinds:
             book.ebook_available = True
-        if "audiobook" in kinds:
-            book.audiobook_available = True
 
     db.commit()
     db.refresh(book)

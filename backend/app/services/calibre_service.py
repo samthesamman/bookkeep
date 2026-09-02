@@ -308,19 +308,14 @@ def cover_file(library_path: str, book_id: int) -> Optional[str]:
     return None
 
 
-# Preferred format order when auto-picking a file to email for a request.
+# Preferred format order when auto-picking a file to email for a request. This
+# Calibre library only ever holds ebooks.
 EBOOK_FORMAT_PREFERENCE = ["EPUB", "AZW3", "MOBI", "AZW", "PDF", "FB2", "DOCX", "TXT", "RTF"]
-AUDIOBOOK_FORMAT_PREFERENCE = ["M4B", "M4A", "MP3", "AAC", "FLAC", "OGG"]
 
 
 def classify_format(fmt: str) -> str:
-    """Return 'ebook', 'audiobook', or 'other' for a Calibre format name."""
-    up = (fmt or "").upper()
-    if up in EBOOK_FORMAT_PREFERENCE:
-        return "ebook"
-    if up in AUDIOBOOK_FORMAT_PREFERENCE:
-        return "audiobook"
-    return "other"
+    """Return 'ebook' for a known ebook format name, else 'other'."""
+    return "ebook" if (fmt or "").upper() in EBOOK_FORMAT_PREFERENCE else "other"
 
 
 # Words ignored when comparing titles.
@@ -481,11 +476,8 @@ def find_book_match(
     return match_books(library_path, [(title, author, isbn)])[0]
 
 
-def pick_format(library_path: str, book_id: int, want: str) -> Optional[str]:
-    """Return the best available format name for a book given a desired kind.
-
-    ``want`` is "ebook" or "audiobook". Returns None if nothing suitable exists.
-    """
+def pick_format(library_path: str, book_id: int) -> Optional[str]:
+    """Return the best available ebook format name for a book, or None."""
     conn = _connect(library_path)
     try:
         rows = conn.execute(
@@ -494,18 +486,8 @@ def pick_format(library_path: str, book_id: int, want: str) -> Optional[str]:
     finally:
         conn.close()
     available = {r["format"].upper() for r in rows if r["format"]}
-    if not available:
-        return None
-    preference = (
-        AUDIOBOOK_FORMAT_PREFERENCE if want == "audiobook" else EBOOK_FORMAT_PREFERENCE
-    )
-    for fmt in preference:
+    for fmt in EBOOK_FORMAT_PREFERENCE:
         if fmt in available:
-            return fmt
-    # Fall back to any format that is not obviously the wrong kind.
-    other = set(AUDIOBOOK_FORMAT_PREFERENCE if want != "audiobook" else EBOOK_FORMAT_PREFERENCE)
-    for fmt in sorted(available):
-        if fmt not in other:
             return fmt
     return None
 

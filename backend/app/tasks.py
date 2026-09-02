@@ -389,7 +389,7 @@ def reconcile_ebook_library_imports(
         for t in tasks:
             if t.book and matched_ids.get(t.id) is None:
                 matched_ids[t.id] = calibre_link_service.linked_library_book_id(
-                    db, library_path, t.book_id, "ebook"
+                    db, library_path, t.book_id
                 )
 
     now = datetime.now(timezone.utc)
@@ -585,7 +585,7 @@ async def reconcile_calibre_library():
                 # Fuzzy match missed - trust a persisted link if the book still
                 # carries an ebook format in the library.
                 calibre_id = calibre_link_service.linked_library_book_id(
-                    db, library_path, req.book_id, "ebook"
+                    db, library_path, req.book_id
                 )
             if calibre_id is None:
                 continue
@@ -712,10 +712,11 @@ async def _import_unlinked_calibre_books(
 
     ``backfill_fuzzy_links`` only links library books that already match a row in
     our ``books`` table, so a side-loaded book we have never seen stays
-    "metadata from Calibre only" forever. For each such book this creates the
-    ``Book`` row from the Calibre identity, enriches it (Open Library, then
-    Hardcover), and — only if something was actually found — links it. Bounded
-    per run.
+    "metadata from Calibre only" forever. For each such book this reuses an
+    existing unlinked ``Book`` for the same work (fuzzy title+author) or creates
+    one from the Calibre identity, enriches it (Open Library, then Hardcover),
+    and links it — a freshly created row only when something was actually found.
+    Bounded per run.
     """
     from app.services import book_metadata, calibre_service, calibre_link_service
     from app.models import Book, CalibreBookLink
@@ -743,17 +744,25 @@ async def _import_unlinked_calibre_books(
         if not title:
             continue
 
-        kinds = {calibre_service.classify_format(f) for f in fmt_map.get(cal_id, [])}
+        has_ebook = any(
+            calibre_service.classify_format(f) == "ebook" for f in fmt_map.get(cal_id, [])
+        )
 
         book = db.query(Book).filter(Book.isbn == isbn).first() if isbn else None
+        if book is None:
+            # Reuse an existing record for the same work (e.g. its audiobook came
+            # in from Audiobookshelf first) as long as nothing else in Calibre is
+            # already linked to it (CalibreBookLink is one-to-one).
+            cand = calibre_link_service.find_matching_book(db, title, author, isbn)
+            if cand is not None and calibre_link_service.get_link_for_book(db, cand.id) is None:
+                book = cand
         fresh_row = book is None
         if book is None:
             book = Book(
                 title=title,
                 author=author or "Unknown Author",
                 isbn=isbn or None,
-                ebook_available="ebook" in kinds,
-                audiobook_available="audiobook" in kinds,
+                ebook_available=has_ebook,
             )
             db.add(book)
             try:
@@ -767,6 +776,9 @@ async def _import_unlinked_calibre_books(
                     error=str(exc),
                 )
                 continue
+        elif has_ebook and not book.ebook_available:
+            # Reused an existing record — this Calibre file makes its ebook available.
+            book.ebook_available = True
 
         try:
             found = await book_metadata.enrich_book(db, book, resolve_hardcover=True)
@@ -982,7 +994,7 @@ async def send_availability_emails():
                 # Not in the library yet — try again on a later run.
                 continue
 
-            fmt = calibre_service.pick_format(library_path, match_id, req.format)
+            fmt = calibre_service.pick_format(library_path, match_id)
             if not fmt:
                 continue
 
@@ -1696,6 +1708,16 @@ async def sync_from_audiobookshelf():
                         (b for b in candidates if match_book_to_abs_item(b, item)),
                         None,
                     )
+
+            # Fuzzy title+author over every Book, so an already-catalogued ebook
+            # of this work (possibly under a differently-subtitled Hardcover
+            # title) is reused rather than a second record created.
+            if not db_book and title:
+                from app.services import calibre_link_service
+
+                cand = calibre_link_service.find_matching_book(db, title, author, isbn)
+                if cand is not None and cand.audiobookshelf_id in (None, item_id):
+                    db_book = cand
 
             # Try Hardcover lookup by title+author
             if not db_book:

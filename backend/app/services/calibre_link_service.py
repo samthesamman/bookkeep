@@ -44,17 +44,13 @@ def get_link_for_book(db: Session, book_id: int) -> Optional[CalibreBookLink]:
 
 
 def linked_library_book_id(
-    db: Session,
-    library_path: str,
-    book_id: int,
-    fmt_kind: str = "ebook",
+    db: Session, library_path: str, book_id: int
 ) -> Optional[int]:
     """Calibre book id for a ``Book`` via its persisted link, or None.
 
     Validates the link before trusting it: the Calibre id must still resolve and
-    carry a format of ``fmt_kind`` ("ebook" / "audiobook", or "" to skip the
-    format check). Used as a fallback when live fuzzy matching misses a book
-    whose metadata drifted after it was linked.
+    still carry an ebook format. Used as a fallback when live fuzzy matching
+    misses a book whose metadata drifted after it was linked.
     """
     link = get_link_for_book(db, book_id)
     if link is None:
@@ -68,20 +64,13 @@ def linked_library_book_id(
             "calibre_link_format_probe_failed", book_id=book_id, error=str(exc)
         )
         return None
-    if not formats:
-        return None
-    if fmt_kind and not any(
-        calibre_service.classify_format(f) == fmt_kind for f in formats
-    ):
+    if not any(calibre_service.classify_format(f) == "ebook" for f in formats):
         return None
     return link.calibre_book_id
 
 
 def find_library_book_id(
-    db: Session,
-    library_path: str,
-    book: Book,
-    fmt_kind: str = "ebook",
+    db: Session, library_path: str, book: Book
 ) -> Optional[int]:
     """Calibre book id for a catalog ``Book``, or None if it isn't in the library.
 
@@ -99,7 +88,7 @@ def find_library_book_id(
         match_id = None
     if match_id is not None:
         return match_id
-    return linked_library_book_id(db, library_path, book.id, fmt_kind)
+    return linked_library_book_id(db, library_path, book.id)
 
 
 def _rank(source: str, confirmed: bool) -> tuple[int, int]:
@@ -281,8 +270,9 @@ def books_missing_metadata(
 
 
 def sync_availability_flags(db: Session, library_path: str) -> int:
-    """Set ebook_available / audiobook_available on linked Books from their
-    Calibre formats, so the rest of the app sees a linked library book as owned.
+    """Set ``ebook_available`` on linked Books that carry an ebook format in the
+    library, so the rest of the app sees a linked library book as owned. (This
+    Calibre library only ever holds ebooks.)
     """
     links = db.query(CalibreBookLink).options(joinedload(CalibreBookLink.book)).all()
     if not links:
@@ -298,17 +288,11 @@ def sync_availability_flags(db: Session, library_path: str) -> int:
     changed = 0
     for link in links:
         formats = fmt_map.get(link.calibre_book_id, [])
-        kinds = {calibre_service.classify_format(f) for f in formats}
         book = link.book
-        if book is None:
+        if book is None or book.ebook_available:
             continue
-        want_ebook = "ebook" in kinds
-        want_audio = "audiobook" in kinds
-        if want_ebook and not book.ebook_available:
+        if any(calibre_service.classify_format(f) == "ebook" for f in formats):
             book.ebook_available = True
-            changed += 1
-        if want_audio and not book.audiobook_available:
-            book.audiobook_available = True
             changed += 1
 
     if changed:
@@ -413,6 +397,50 @@ def _match_calibre_book(
         if score > best:
             best, best_id = score, cand_id
     return best_id
+
+
+def find_matching_book(
+    db: Session, title: str, author: Optional[str] = None, isbn: Optional[str] = None
+) -> Optional[Book]:
+    """An existing ``Book`` row that is the same work as ``(title, author, isbn)``, or None.
+
+    For use *before* creating a new Book from an external source (an
+    Audiobookshelf item, an unlinked Calibre book), so the ebook and audiobook of
+    one work land on the same record even when their titles differ only by a
+    subtitle, or each resolved to a different Hardcover entry for the same book.
+
+    Stricter than `_match_calibre_book`: when both sides name a (non-placeholder)
+    author they must share a token — wrongly merging two different books is worse
+    than missing a merge, which just leaves a second record to merge by hand.
+    """
+    key = calibre_service._isbn_key(isbn)
+    want_title = calibre_service._title_tokens(title or "")
+    if not want_title and not key:
+        return None
+    want_author = calibre_service._author_tokens(author or "")
+
+    best_id: Optional[int] = None
+    best_score = -1.0
+    for bid, btitle, bisbn, bauthor in db.query(
+        Book.id, Book.title, Book.isbn, Book.author
+    ).all():
+        if key and calibre_service._isbn_key(bisbn) == key:
+            return db.query(Book).filter(Book.id == bid).first()
+        if not want_title:
+            continue
+        cand_title = calibre_service._title_tokens(btitle or "")
+        if not calibre_service._titles_match(want_title, cand_title):
+            continue
+        cand_author = calibre_service._author_tokens(bauthor or "")
+        if want_author and cand_author and not (want_author & cand_author):
+            continue
+        score = len(want_title & cand_title) / max(len(want_title | cand_title), 1)
+        if want_author and cand_author:
+            score += len(want_author & cand_author) / len(want_author)
+        if score > best_score:
+            best_id, best_score = bid, score
+
+    return db.query(Book).filter(Book.id == best_id).first() if best_id is not None else None
 
 
 def backfill_fuzzy_links(db: Session, library_path: str) -> int:

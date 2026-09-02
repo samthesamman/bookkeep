@@ -1486,7 +1486,6 @@ export interface CalibreByHardcover {
   link_source: string | null;
   link_confirmed: boolean;
   ebook_formats: string[];
-  audiobook_formats: string[];
   format_details: Array<{ format: string; size: number | null; name: string }>;
 }
 

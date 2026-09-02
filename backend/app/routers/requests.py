@@ -886,7 +886,7 @@ async def update_processing_requests_status(db: Session) -> None:
             if req.format == "ebook" and calibre_library_path:
                 try:
                     match_id = calibre_link_service.find_library_book_id(
-                        db, calibre_library_path, req.book, "ebook"
+                        db, calibre_library_path, req.book
                     )
                 except calibre_service.CalibreError as exc:
                     logger.warning("request_calibre_lookup_failed", request_id=req.id, error=str(exc))

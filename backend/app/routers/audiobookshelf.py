@@ -494,7 +494,12 @@ def _normalize_abs_item(item: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _match_local_book(entry: Dict[str, Any], db: Session) -> Optional[models.Book]:
-    """Find the catalog Book for an Audiobookshelf item (abs id → ISBN → title+author)."""
+    """Find the catalog Book for an Audiobookshelf item.
+
+    abs id → ISBN → exact title+author → fuzzy title+author. The fuzzy step reuses
+    the ebook/audiobook of one work onto a single record even when their titles
+    differ by a subtitle or each resolved to a different Hardcover entry.
+    """
     book = None
     if entry.get("id"):
         book = db.query(models.Book).filter(
@@ -507,6 +512,15 @@ def _match_local_book(entry: Dict[str, Any], db: Session) -> Optional[models.Boo
             func.lower(models.Book.title) == entry["title"].lower(),
             func.lower(models.Book.author) == entry["author"].lower(),
         ).first()
+    if not book and entry.get("title"):
+        from app.services import calibre_link_service
+
+        cand = calibre_link_service.find_matching_book(
+            db, entry["title"], entry.get("author"), entry.get("isbn")
+        )
+        # Don't steal a Book already tied to a different Audiobookshelf item.
+        if cand is not None and cand.audiobookshelf_id in (None, entry.get("id")):
+            book = cand
     return book
 
 
@@ -752,11 +766,8 @@ def _link_book_to_calibre(db: Session, book: models.Book) -> None:
         )
 
         formats = calibre_service.formats_for_ids(library_path, [match_id]).get(match_id, [])
-        kinds = {calibre_service.classify_format(f) for f in formats}
-        if "ebook" in kinds:
+        if any(calibre_service.classify_format(f) == "ebook" for f in formats):
             book.ebook_available = True
-        if "audiobook" in kinds:
-            book.audiobook_available = True
     except Exception as exc:  # never let linking break the resolve
         logger.warning("audiobookshelf_resolve_calibre_link_failed", book_id=book.id, error=str(exc))
 

@@ -92,8 +92,6 @@ export default function BookDetails() {
   });
   const calibreEbookFormats =
     calibre?.format_details.filter((f) => calibre.ebook_formats.includes(f.format)) ?? [];
-  const calibreAudioFormats =
-    calibre?.format_details.filter((f) => calibre.audiobook_formats.includes(f.format)) ?? [];
 
   // Deep link into Audiobookshelf for a book that's linked to an ABS item.
   const { data: absWebUrl } = useQuery({
@@ -295,7 +293,6 @@ export default function BookDetails() {
     dbBook?.audiobook_available ||
     book.audiobookAvailable ||
     audiobookRequestAvailable ||
-    calibreAudioFormats.length > 0 ||
     false;
   const ebookNotFound = ebookRequestStatus === 'not_found';
   const audiobookNotFound = audiobookRequestStatus === 'not_found';
@@ -409,9 +406,7 @@ export default function BookDetails() {
   // only, duplicated at the very bottom so it's reachable after scrolling past
   // the description. Extracted into helpers so the conditionals live in one
   // place.
-  const hasLibraryCard = Boolean(
-    calibre && (calibreEbookFormats.length > 0 || calibreAudioFormats.length > 0),
-  );
+  const hasLibraryCard = Boolean(calibre && calibreEbookFormats.length > 0);
   const hasListenCard = Boolean(listenNowUrl);
   const hasAnyActionButton = Boolean(
     (canDownload && hasMissingFormat) ||
@@ -518,20 +513,11 @@ export default function BookDetails() {
             </span>
           )}
         </div>
-        {calibreEbookFormats.length > 0 && (
-          <CalibreFormatActions
-            calibreBookId={calibre.calibre_book_id}
-            formats={calibreEbookFormats}
-            heading={calibreAudioFormats.length > 0 ? 'eBook' : null}
-          />
-        )}
-        {calibreAudioFormats.length > 0 && (
-          <CalibreFormatActions
-            calibreBookId={calibre.calibre_book_id}
-            formats={calibreAudioFormats}
-            heading={calibreEbookFormats.length > 0 ? 'Audiobook' : null}
-          />
-        )}
+        <CalibreFormatActions
+          calibreBookId={calibre.calibre_book_id}
+          formats={calibreEbookFormats}
+          heading={null}
+        />
       </div>
     );
   };

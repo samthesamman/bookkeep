@@ -135,11 +135,11 @@ def test_sync_availability_flags(db, library):
     cls.upsert_link(db, calibre_book_id=20, book_id=b2.id, source="fuzzy")
 
     changed = cls.sync_availability_flags(db, library)
-    assert changed == 3  # b1 ebook; b2 ebook + audiobook
+    assert changed == 2  # b1 + b2 both carry an EPUB
     db.refresh(b1)
     db.refresh(b2)
     assert b1.ebook_available and not b1.audiobook_available
-    assert b2.ebook_available and b2.audiobook_available
+    assert b2.ebook_available and not b2.audiobook_available  # MP3 on b2 is ignored
     # Idempotent.
     assert cls.sync_availability_flags(db, library) == 0
 
@@ -147,31 +147,29 @@ def test_sync_availability_flags(db, library):
 def test_find_library_book_id_prefers_fuzzy_then_link(db, library):
     # Fuzzy match works on its own — no link needed.
     b1 = _book(db, title="The Hobbit", author="J.R.R. Tolkien")
-    assert cls.find_library_book_id(db, library, b1, "ebook") == 10
+    assert cls.find_library_book_id(db, library, b1) == 10
 
     # Metadata drifted so fuzzy misses, but a persisted link carries it.
     b2 = _book(db, title="Dune: Deluxe Anniversary Edition", author="F. Herbert (ed.)")
-    assert cls.find_library_book_id(db, library, b2, "ebook") is None
+    assert cls.find_library_book_id(db, library, b2) is None
     cls.upsert_link(db, calibre_book_id=20, book_id=b2.id, source="download", confirmed=True)
-    assert cls.find_library_book_id(db, library, b2, "ebook") == 20
+    assert cls.find_library_book_id(db, library, b2) == 20
 
 
-def test_linked_library_book_id_validates_format_and_existence(db, library):
+def test_linked_library_book_id_validates_ebook_and_existence(db, library):
+    # Calibre book 10 has an EPUB.
     b = _book(db, title="Whatever", author="Someone")
-    # Calibre book 10 has only an EPUB (no audio).
     cls.upsert_link(db, calibre_book_id=10, book_id=b.id, source="manual", confirmed=True)
-    assert cls.linked_library_book_id(db, library, b.id, "ebook") == 10
-    assert cls.linked_library_book_id(db, library, b.id, "audiobook") is None
-    assert cls.linked_library_book_id(db, library, b.id, "") == 10
+    assert cls.linked_library_book_id(db, library, b.id) == 10
 
     # Link to a Calibre id that no longer exists.
     b2 = _book(db, title="Gone", author="X")
     cls.upsert_link(db, calibre_book_id=4242, book_id=b2.id, source="manual", confirmed=True)
-    assert cls.linked_library_book_id(db, library, b2.id, "") is None
+    assert cls.linked_library_book_id(db, library, b2.id) is None
 
     # No link at all.
     b3 = _book(db, title="Unlinked", author="Y")
-    assert cls.linked_library_book_id(db, library, b3.id, "ebook") is None
+    assert cls.linked_library_book_id(db, library, b3.id) is None
 
 
 def test_books_missing_metadata_selects_unrefreshed_and_stale(db):
@@ -249,6 +247,34 @@ def test_overlay_title_author_only_win_when_locked(db):
     out = cls.overlay_book_dict(base, link)
     assert out["title"] == "Corrected Title"
     assert out["authors"] == "Real Author"
+
+
+def test_find_matching_book_reuses_record_across_subtitle_and_author_form(db):
+    ebook = _book(db, title="The Fifth Season", author="N. K. Jemisin")
+
+    # Audiobook side: subtitle + "First Last" vs "F. Last" — same work.
+    assert cls.find_matching_book(
+        db, "The Fifth Season: The Broken Earth, Book 1", "N.K. Jemisin"
+    ).id == ebook.id
+    # ISBN wins outright even with a nonsense title.
+    ebook.isbn = "9780316229296"
+    db.commit()
+    assert cls.find_matching_book(db, "???", None, "978-0-316-22929-6").id == ebook.id
+
+
+def test_find_matching_book_wont_merge_different_authors(db):
+    _book(db, title="The Gift", author="Cecelia Ahern")
+    _book(db, title="The Gift", author="Alison Croggon")
+    # Same title, both authors named and disjoint -> no merge.
+    assert cls.find_matching_book(db, "The Gift", "Lewis Hyde") is None
+    # ...but the right author still resolves.
+    assert cls.find_matching_book(db, "The Gift", "Cecelia Ahern").author == "Cecelia Ahern"
+
+
+def test_find_matching_book_none_when_nothing_close(db):
+    _book(db, title="Dune", author="Frank Herbert")
+    assert cls.find_matching_book(db, "Neuromancer", "William Gibson") is None
+    assert cls.find_matching_book(db, "", None, None) is None
 
 
 def test_overlay_prefers_book_identity_once_hardcover_resolved(db):
