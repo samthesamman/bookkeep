@@ -6,6 +6,7 @@ import {
   searchBooks,
   getBookDetails,
   getBookPrompts,
+  getSimilarBooks,
   transformHardcoverBook,
   type HardcoverBook 
 } from '@/lib/hardcover';
@@ -158,6 +159,20 @@ export function useBookDetails(bookId: string | undefined) {
     },
     enabled: !!bookId,
     staleTime: 10 * 60 * 1000, // 10 minutes
+  });
+}
+
+export function useSimilarBooks(bookId: number | undefined, limit: number = 12) {
+  return useQuery({
+    queryKey: ['hardcover', 'similar-books', bookId, limit],
+    queryFn: async () => {
+      if (!bookId) throw new Error('Book ID required');
+      const data = await getSimilarBooks(bookId, limit);
+      return transformBooks(data.books || []);
+    },
+    enabled: Number.isFinite(bookId),
+    staleTime: 24 * 60 * 60 * 1000,
+    gcTime: 24 * 60 * 60 * 1000,
   });
 }
 

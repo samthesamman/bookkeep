@@ -2854,6 +2854,7 @@ async def get_similar_books(
         id
         rating
         ratings_count
+        cached_similar_book_ids
         contributions {
           author {
             id
@@ -2875,20 +2876,60 @@ async def get_similar_books(
     book_result = await execute_graphql(book_details_query, {"id": book_id}, db=db)
     book_data = book_result.get("books_by_pk")
     book_details_duration = (time.time() - book_details_query_start) * 1000
-    
+
     if not book_data:
         raise HTTPException(status_code=404, detail="Target book not found for similarity search")
-    
+
     # Extract metadata
     author_ids = [c["author"]["id"] for c in book_data.get("contributions", []) if c.get("author", {}).get("id")]
     tag_names = [t["tag"]["tag"] for t in book_data.get("taggings", []) if t.get("tag", {}).get("tag")]
+    cached_similar_ids = [int(i) for i in (book_data.get("cached_similar_book_ids") or []) if i]
     series_id = None
     if book_data.get("book_series") and len(book_data["book_series"]) > 0:
         series_id = book_data["book_series"][0].get("series", {}).get("id")
-    
+
     similar_books = []
     seen_book_ids = {book_id}
-    
+
+    # Hardcover's own precomputed "readers also enjoyed" list is the strongest
+    # signal — use it first, then let the series / tag logic below top up if it
+    # comes back short (or empty, for an obscure book).
+    cache_query_start = time.time()
+    if cached_similar_ids:
+        candidate_ids = cached_similar_ids[: limit * 4]
+        cached_query = (
+            "query SimilarByCache($ids: [Int!]!) {\n"
+            "  books(where: {id: {_in: $ids}, ratings_count: {_gte: 30}}) {"
+            + _BOOK_LIST_FIELDS
+            + "  }\n}"
+        )
+        try:
+            result = await execute_graphql(cached_query, {"ids": candidate_ids}, db=db)
+            by_id = {b["id"]: b for b in result.get("books", []) if b.get("id")}
+            # Preserve Hardcover's ranking (the query returns them unordered).
+            for cid in candidate_ids:
+                if len(similar_books) >= limit:
+                    break
+                book = by_id.get(cid)
+                if not book or book["id"] in seen_book_ids:
+                    continue
+                book_author_ids = [
+                    c["author"]["id"]
+                    for c in book.get("contributions", [])
+                    if c.get("author", {}).get("id")
+                ]
+                # Keep this section distinct from "More by this author".
+                if author_ids and set(book_author_ids) & set(author_ids):
+                    continue
+                similar_books.append(book)
+                seen_book_ids.add(book["id"])
+                _save_book_to_db(book, db)
+        except Exception as e:
+            logger.warning("similar_books_cache_query_failed", book_id=book_id, error=str(e))
+    cache_query_duration = (time.time() - cache_query_start) * 1000
+    logger.info("similar_books_cache_query", duration_ms=cache_query_duration,
+                cached_ids=len(cached_similar_ids), books_added=len(similar_books))
+
     # Fetch books from the same series (highest priority)
     series_query_start = time.time()
     if series_id and len(similar_books) < limit:
@@ -3053,6 +3094,7 @@ async def get_similar_books(
         books_count=len(books),
         total_duration_ms=total_duration,
         book_details_duration_ms=book_details_duration,
+        cache_query_duration_ms=cache_query_duration,
         series_query_duration_ms=series_duration if 'series_duration' in locals() else 0,
         tags_query_duration_ms=tags_duration if 'tags_duration' in locals() else 0,
     )
