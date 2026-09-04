@@ -211,7 +211,7 @@ async def match_audiobookshelf_item(
     author: Optional[str] = None,
     isbn: Optional[str] = None,
     provider: Optional[str] = None,
-    override_details: bool = False,
+    override_defaults: bool = True,
 ) -> bool:
     """Trigger a metadata quick-match for one Audiobookshelf library item.
 
@@ -220,15 +220,9 @@ async def match_audiobookshelf_item(
     Returns True when Audiobookshelf reports the item was updated.
     """
     url = f"{server.url.rstrip('/')}/api/items/{item_id}/match"
-    payload: Dict[str, Any] = {"overrideDetails": override_details}
+    payload: Dict[str, Any] = {"overrideDefaults": override_defaults}
     if provider:
         payload["provider"] = provider
-    if title:
-        payload["title"] = title
-    if author:
-        payload["author"] = author
-    if isbn:
-        payload["isbn"] = isbn
 
     try:
         async with httpx.AsyncClient(timeout=30.0, follow_redirects=True, verify=False) as client:
