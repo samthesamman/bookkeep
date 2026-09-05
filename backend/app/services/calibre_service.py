@@ -428,6 +428,7 @@ def _match_against_catalog(
 
     best_id: Optional[int] = None
     best_score = -1.0
+    best_cand: Optional[tuple] = None
     for cand_id, cand_title, cand_auth in catalog:
         if not _titles_match(want_title, cand_title):
             continue
@@ -441,6 +442,27 @@ def _match_against_catalog(
         if score > best_score:
             best_score = score
             best_id = cand_id
+            best_cand = (cand_title, cand_auth)
+
+    if best_id is not None:
+        cand_title, cand_auth = best_cand
+        logger.info(
+            "calibre_fuzzy_match_found",
+            query_title=title,
+            query_author=author,
+            matched_calibre_id=best_id,
+            matched_title_tokens=sorted(cand_title),
+            matched_author_tokens=sorted(cand_auth),
+            score=round(best_score, 3),
+            author_overlap=bool(want_author and cand_auth and (want_author & cand_auth)),
+        )
+    else:
+        logger.info(
+            "calibre_fuzzy_match_not_found",
+            query_title=title,
+            query_author=author,
+            query_title_tokens=sorted(want_title),
+        )
     return best_id
 
 

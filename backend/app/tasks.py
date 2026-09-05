@@ -438,6 +438,9 @@ def reconcile_ebook_library_imports(
             "ebook_import_confirmed",
             task_id=task.id,
             book_id=task.book_id,
+            book_title=task.book.title if task.book else None,
+            book_author=task.book.author if task.book else None,
+            matched_calibre_id=matched_ids.get(task.id),
             reason="calibre" if found else "timeout",
         )
 
@@ -614,6 +617,8 @@ async def reconcile_calibre_library():
                 "request_available_from_calibre",
                 request_id=req.id,
                 book_id=req.book_id,
+                book_title=req.book.title,
+                book_author=req.book.author,
                 calibre_id=calibre_id,
                 previous_status=prev,
             )
@@ -1058,7 +1063,16 @@ async def promote_and_email(book_id: Optional[int] = None, fmt: Optional[str] = 
             if fmt:
                 q = q.filter(BookRequest.format == fmt)
             now = datetime.now(timezone.utc)
-            for req in q.all():
+            open_reqs = q.all()
+            logger.info(
+                "promote_and_email_processing_download",
+                book_id=book_id,
+                book_title=book.title if book else None,
+                book_author=book.author if book else None,
+                format=fmt,
+                open_requests=[r.id for r in open_reqs],
+            )
+            for req in open_reqs:
                 req.status = "available"
                 req.updated_at = now
                 if book and req.format == "ebook":
@@ -1066,6 +1080,12 @@ async def promote_and_email(book_id: Optional[int] = None, fmt: Optional[str] = 
                 elif book and req.format == "audiobook":
                     book.audiobook_available = True
                 changed = True
+                logger.info(
+                    "request_available_after_download",
+                    request_id=req.id,
+                    book_id=book_id,
+                    format=req.format,
+                )
             if changed:
                 db.commit()
         else:

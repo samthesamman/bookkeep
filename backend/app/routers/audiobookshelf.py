@@ -296,16 +296,30 @@ async def link_and_match_new_audiobook(
 
         # Link the book: the new item that matches by name, else the sole new one.
         if not book.audiobookshelf_id and new_items:
-            target = next(
+            name_matched = next(
                 (iid for iid, it in new_items.items() if match_book_to_abs_item(book, it)),
                 None,
-            ) or (next(iter(new_items)) if len(new_items) == 1 else None)
+            )
+            target = name_matched or (next(iter(new_items)) if len(new_items) == 1 else None)
             if target:
                 book.audiobookshelf_id = target
                 book.audiobook_available = True
                 db.commit()
                 logger.info(
-                    "audiobookshelf_new_item_linked", book_id=book_id, item_id=target
+                    "audiobookshelf_new_item_linked",
+                    book_id=book_id,
+                    book_title=book.title,
+                    book_author=book.author,
+                    item_id=target,
+                    reason="title_author_match" if name_matched else "sole_new_item",
+                )
+            else:
+                logger.info(
+                    "audiobookshelf_new_item_not_linked",
+                    book_id=book_id,
+                    book_title=book.title,
+                    book_author=book.author,
+                    new_item_count=len(new_items),
                 )
 
         logger.info(
@@ -380,6 +394,12 @@ def match_book_to_abs_item(book: models.Book, item: Dict[str, Any]) -> bool:
 
     item_isbn = metadata.get("isbn")
     if item_isbn and book.isbn and item_isbn == book.isbn:
+        logger.info(
+            "abs_match_by_isbn",
+            book_id=book.id,
+            book_title=book.title,
+            item_id=item.get("id"),
+        )
         return True
 
     item_title = _norm_for_match(metadata.get("title"))
@@ -406,7 +426,20 @@ def match_book_to_abs_item(book: models.Book, item: Dict[str, Any]) -> bool:
         or book_author.split()[-1] in item_author.split()
         or item_author.split()[-1] in book_author.split()
     )
-    return title_ok and author_ok
+    result = title_ok and author_ok
+    logger.info(
+        "abs_match_by_title_author",
+        book_id=book.id,
+        book_title=book.title,
+        book_author=book.author,
+        item_id=item.get("id"),
+        item_title=metadata.get("title"),
+        item_author=metadata.get("authorName"),
+        title_ok=title_ok,
+        author_ok=author_ok,
+        matched=result,
+    )
+    return result
 
 
 async def search_audiobookshelf_items(

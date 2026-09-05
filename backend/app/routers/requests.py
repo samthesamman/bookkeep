@@ -900,7 +900,10 @@ async def update_processing_requests_status(db: Session) -> None:
                     updated_count += 1
                     logger.info("request_marked_available",
                               request_id=req.id,
+                              book_id=req.book_id,
                               book_title=req.book.title,
+                              book_author=req.book.author,
+                              matched_calibre_id=match_id,
                               format=req.format,
                               source="calibre_library")
                     continue
