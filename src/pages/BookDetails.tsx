@@ -67,10 +67,14 @@ export default function BookDetails() {
   }, [goBack, requestOpen, searchOpen, relinkOpen, absRelinkOpen, sourcesOpen]);
 
   const { data: book, isLoading, error } = useBookDetails(id);
-  const hardcoverId = book?.hardcoverId ?? (book?.id ? Number(book.id) : undefined);
+  // Derive this from the route param, not from `book` — the URL already *is*
+  // the hardcover id, and waiting on the (external, often-slowest) Hardcover
+  // fetch before starting the local queries below is what let the page paint
+  // with un-curated Hardcover data before flipping to the chosen metadata.
+  const hardcoverId = id ? Number(id) : undefined;
   const hasHardcoverId = Number.isFinite(hardcoverId);
 
-  const { data: dbBook } = useQuery({
+  const { data: dbBook, isLoading: dbBookLoading } = useQuery({
     queryKey: ['book', 'by-hardcover', hardcoverId],
     queryFn: () => booksApi.getByHardcoverId(hardcoverId as number),
     enabled: hasHardcoverId,
@@ -89,7 +93,7 @@ export default function BookDetails() {
   });
 
   // Is this book already in the Calibre library (via the metadata-overlay link)?
-  const { data: calibre } = useQuery({
+  const { data: calibre, isLoading: calibreLoading } = useQuery({
     queryKey: ['calibre', 'by-hardcover', hardcoverId],
     queryFn: () => calibreApi.getByHardcover(hardcoverId as number),
     enabled: hasHardcoverId,
@@ -226,7 +230,10 @@ export default function BookDetails() {
     },
   });
 
-  if (isLoading) {
+  // Wait on dbBook/calibre too (not just the Hardcover fetch) — they
+  // determine whether curated/local metadata should win, and painting before
+  // they've settled is what caused the page to flash un-curated data.
+  if (isLoading || (hasHardcoverId && (dbBookLoading || calibreLoading))) {
     return (
       <div className="space-y-8 animate-fade-in">
         <Skeleton className="h-6 w-32 rounded-lg" />
@@ -338,16 +345,8 @@ export default function BookDetails() {
   // shows), else the local Book row. When it exists and either the book is in
   // Calibre or an admin curated it (metadata_locked), it wins over Hardcover;
   // otherwise Hardcover leads and local only fills gaps.
-  //
-  // `calibre` and `calBook` resolve after `dbBook` (calBook is gated on
-  // calibre's result). If a Calibre link exists, dbBook's raw stored fields
-  // are not what should be shown — the overlay in calBook is — so hold off
-  // on preferring local data until we know whether a link exists and, if so,
-  // until the overlay has actually loaded. Otherwise the page briefly flashes
-  // dbBook's raw/Calibre-scanned metadata before calBook's overlay replaces it.
-  const calibreLinkPending = hasHardcoverId && (calibre === undefined || (!!calibre?.calibre_book_id && !calBook));
   const curated = !!dbBook?.metadata_locked;
-  const preferLocal = !calibreLinkPending && (!!calBook || curated);
+  const preferLocal = !!calBook || curated;
   const pick = <T,>(local: T | undefined, remote: T | undefined): T | undefined =>
     preferLocal ? local ?? remote : remote ?? local;
 
@@ -377,31 +376,18 @@ export default function BookDetails() {
         series: clean(calBook.series),
         seriesPosition: clean(calBook.series_index),
       }
-    : calibreLinkPending
-      ? {
-          title: undefined,
-          author: undefined,
-          cover: undefined,
-          description: undefined,
-          genres: [] as string[],
-          rating: undefined,
-          pageCount: undefined,
-          publishedDate: undefined,
-          series: undefined,
-          seriesPosition: undefined,
-        }
-      : {
-          title: clean(dbBook?.title),
-          author: clean(dbBook?.author),
-          cover: clean(dbBook?.cover_url),
-          description: clean(dbBook?.description),
-          genres: overlayGenres,
-          rating: dbBook?.rating && dbBook.rating > 0 ? dbBook.rating : undefined,
-          pageCount: dbBook?.page_count && dbBook.page_count > 0 ? dbBook.page_count : undefined,
-          publishedDate: clean(dbBook?.published_date),
-          series: clean(dbBook?.series),
-          seriesPosition: clean(dbBook?.series_position),
-        };
+    : {
+        title: clean(dbBook?.title),
+        author: clean(dbBook?.author),
+        cover: clean(dbBook?.cover_url),
+        description: clean(dbBook?.description),
+        genres: overlayGenres,
+        rating: dbBook?.rating && dbBook.rating > 0 ? dbBook.rating : undefined,
+        pageCount: dbBook?.page_count && dbBook.page_count > 0 ? dbBook.page_count : undefined,
+        publishedDate: clean(dbBook?.published_date),
+        series: clean(dbBook?.series),
+        seriesPosition: clean(dbBook?.series_position),
+      };
 
   const displayTitle = pick(local.title, book.title) || book.title;
   const displayAuthor = pick(local.author, book.author) || book.author;
