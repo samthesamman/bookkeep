@@ -338,8 +338,16 @@ export default function BookDetails() {
   // shows), else the local Book row. When it exists and either the book is in
   // Calibre or an admin curated it (metadata_locked), it wins over Hardcover;
   // otherwise Hardcover leads and local only fills gaps.
+  //
+  // `calibre` and `calBook` resolve after `dbBook` (calBook is gated on
+  // calibre's result). If a Calibre link exists, dbBook's raw stored fields
+  // are not what should be shown — the overlay in calBook is — so hold off
+  // on preferring local data until we know whether a link exists and, if so,
+  // until the overlay has actually loaded. Otherwise the page briefly flashes
+  // dbBook's raw/Calibre-scanned metadata before calBook's overlay replaces it.
+  const calibreLinkPending = hasHardcoverId && (calibre === undefined || (!!calibre?.calibre_book_id && !calBook));
   const curated = !!dbBook?.metadata_locked;
-  const preferLocal = !!calBook || curated;
+  const preferLocal = !calibreLinkPending && (!!calBook || curated);
   const pick = <T,>(local: T | undefined, remote: T | undefined): T | undefined =>
     preferLocal ? local ?? remote : remote ?? local;
 
@@ -369,18 +377,31 @@ export default function BookDetails() {
         series: clean(calBook.series),
         seriesPosition: clean(calBook.series_index),
       }
-    : {
-        title: clean(dbBook?.title),
-        author: clean(dbBook?.author),
-        cover: clean(dbBook?.cover_url),
-        description: clean(dbBook?.description),
-        genres: overlayGenres,
-        rating: dbBook?.rating && dbBook.rating > 0 ? dbBook.rating : undefined,
-        pageCount: dbBook?.page_count && dbBook.page_count > 0 ? dbBook.page_count : undefined,
-        publishedDate: clean(dbBook?.published_date),
-        series: clean(dbBook?.series),
-        seriesPosition: clean(dbBook?.series_position),
-      };
+    : calibreLinkPending
+      ? {
+          title: undefined,
+          author: undefined,
+          cover: undefined,
+          description: undefined,
+          genres: [] as string[],
+          rating: undefined,
+          pageCount: undefined,
+          publishedDate: undefined,
+          series: undefined,
+          seriesPosition: undefined,
+        }
+      : {
+          title: clean(dbBook?.title),
+          author: clean(dbBook?.author),
+          cover: clean(dbBook?.cover_url),
+          description: clean(dbBook?.description),
+          genres: overlayGenres,
+          rating: dbBook?.rating && dbBook.rating > 0 ? dbBook.rating : undefined,
+          pageCount: dbBook?.page_count && dbBook.page_count > 0 ? dbBook.page_count : undefined,
+          publishedDate: clean(dbBook?.published_date),
+          series: clean(dbBook?.series),
+          seriesPosition: clean(dbBook?.series_position),
+        };
 
   const displayTitle = pick(local.title, book.title) || book.title;
   const displayAuthor = pick(local.author, book.author) || book.author;
