@@ -1754,6 +1754,30 @@ async def sync_from_audiobookshelf():
                 if cand is not None and cand.audiobookshelf_id in (None, item_id):
                     db_book = cand
 
+            # Requested-but-unlinked audiobooks: this item may belong to an
+            # in-flight request whose Book already carries the hardcover_id
+            # picked when it was requested/approved. Prefer reusing that Book
+            # over a fresh identity-less Hardcover search below (which can
+            # miss, or create a duplicate row) — reuse the same title/author
+            # matcher the direct post-download linker uses, scoped to just
+            # the small set of outstanding audiobook requests so a looser
+            # match here can't misfire against the whole library.
+            if not db_book:
+                pending_books = (
+                    db.query(Book)
+                    .join(BookRequest, BookRequest.book_id == Book.id)
+                    .filter(
+                        BookRequest.format == "audiobook",
+                        BookRequest.status.in_(["processing", "approved"]),
+                        Book.audiobookshelf_id.is_(None),
+                    )
+                    .all()
+                )
+                db_book = next(
+                    (b for b in pending_books if match_book_to_abs_item(b, item)),
+                    None,
+                )
+
             # Try Hardcover lookup by title+author
             if not db_book:
                 try:
