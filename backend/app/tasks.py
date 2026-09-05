@@ -593,14 +593,13 @@ async def reconcile_calibre_library():
             if calibre_id is None:
                 continue
             prev = req.status
-            req.status = "available"
-            req.updated_at = now
-            req.book.ebook_available = True
-            updated += 1
-            promoted.append(req.book_id)
-            # A request that resolved to a library book is a strong link.
+            # A request that resolves to a library book is a strong link - but
+            # if another Book already owns that Calibre id with an equal or
+            # stronger link, this match is a false positive (e.g. two
+            # similarly-titled books colliding in the fuzzy matcher) and must
+            # not flip this request to available with nothing actually linked.
             try:
-                calibre_link_service.upsert_link(
+                link = calibre_link_service.upsert_link(
                     db,
                     calibre_book_id=calibre_id,
                     book_id=req.book_id,
@@ -613,6 +612,22 @@ async def reconcile_calibre_library():
                 )
             except Exception as exc:
                 logger.warning("calibre_link_on_request_failed", request_id=req.id, error=str(exc))
+                link = None
+            if link is None:
+                logger.info(
+                    "request_calibre_match_conflict",
+                    request_id=req.id,
+                    book_id=req.book_id,
+                    book_title=req.book.title,
+                    book_author=req.book.author,
+                    calibre_id=calibre_id,
+                )
+                continue
+            req.status = "available"
+            req.updated_at = now
+            req.book.ebook_available = True
+            updated += 1
+            promoted.append(req.book_id)
             logger.info(
                 "request_available_from_calibre",
                 request_id=req.id,

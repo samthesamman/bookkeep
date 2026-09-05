@@ -893,20 +893,48 @@ async def update_processing_requests_status(db: Session) -> None:
                     match_id = None
 
                 if match_id is not None:
-                    req.status = "available"
-                    req.updated_at = now
-                    req.book.ebook_available = True
-                    db.add(req.book)
-                    updated_count += 1
-                    logger.info("request_marked_available",
-                              request_id=req.id,
-                              book_id=req.book_id,
-                              book_title=req.book.title,
-                              book_author=req.book.author,
-                              matched_calibre_id=match_id,
-                              format=req.format,
-                              source="calibre_library")
-                    continue
+                    # Persist the link and only mark available if it actually
+                    # resolves to this book - a stronger existing link on
+                    # match_id (e.g. another book that already claimed it via
+                    # a real download) means this is a false-positive fuzzy
+                    # match and must not flip status with nothing linked.
+                    try:
+                        link = calibre_link_service.upsert_link(
+                            db,
+                            calibre_book_id=match_id,
+                            book_id=req.book_id,
+                            source="download" if req.edition_id or req.book.hardcover_id else "fuzzy",
+                            confidence=None,
+                            confirmed=bool(req.edition_id or req.book.hardcover_id),
+                            calibre_isbn=req.book.isbn,
+                            calibre_title=req.book.title,
+                            commit=False,
+                        )
+                    except Exception as exc:
+                        logger.warning("calibre_link_on_request_failed", request_id=req.id, error=str(exc))
+                        link = None
+
+                    if link is None:
+                        logger.info("request_calibre_match_conflict",
+                                  request_id=req.id,
+                                  book_id=req.book_id,
+                                  book_title=req.book.title,
+                                  matched_calibre_id=match_id)
+                    else:
+                        req.status = "available"
+                        req.updated_at = now
+                        req.book.ebook_available = True
+                        db.add(req.book)
+                        updated_count += 1
+                        logger.info("request_marked_available",
+                                  request_id=req.id,
+                                  book_id=req.book_id,
+                                  book_title=req.book.title,
+                                  book_author=req.book.author,
+                                  matched_calibre_id=match_id,
+                                  format=req.format,
+                                  source="calibre_library")
+                        continue
 
             # Look for a completed + imported DownloadTask for this book+format.
             # "seeding" torrents have finished downloading — treat them as complete.
