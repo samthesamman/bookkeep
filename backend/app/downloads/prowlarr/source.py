@@ -246,7 +246,7 @@ class ProwlarrSource(ReleaseSource):
             )
 
         # Validate title if provided - prevents grabbing wrong books by same author
-        if expected_title and not self._title_matches(title, expected_title):
+        if expected_title and not self._title_matches(title, expected_title, expected_author):
             logger.info(
                 "prowlarr_drop_title_mismatch",
                 release_title=title,
@@ -344,7 +344,7 @@ class ProwlarrSource(ReleaseSource):
             info_url=parsed.get("info_url"),
         )
 
-        logger.debug(
+        logger.info(
             "prowlarr_release_scored",
             title=title,
             file_name=file_name,
@@ -417,7 +417,36 @@ class ProwlarrSource(ReleaseSource):
         "is", "it", "by", "with", "from", "as", "but", "not", "no", "be",
     })
 
-    def _title_matches(self, release_title: str, expected_title: str) -> bool:
+    # Punctuation stripped from the edges of a token before comparing it
+    _TOKEN_PUNCT = ":;,.!?\"'()[]{}-–—"
+
+    @classmethod
+    def _significant_words(cls, text: str, author_tokens: frozenset = frozenset()) -> list:
+        """
+        Split ``text`` into lowercased tokens, dropping stop words, the author's
+        name, and edge punctuation (so "oudolf:" compares equal to "oudolf").
+        """
+        words = []
+        for raw in text.lower().split():
+            w = raw.strip(cls._TOKEN_PUNCT)
+            if w and w not in cls._STOP_WORDS and w not in author_tokens:
+                words.append(w)
+        return words
+
+    @staticmethod
+    def _author_name_tokens(expected_author: Optional[str]) -> frozenset:
+        """Distinctive lowercased tokens of the author's name (length > 1)."""
+        if not expected_author:
+            return frozenset()
+        parts = re.split(r"[\s,.]+", expected_author.lower())
+        return frozenset(p for p in parts if len(p) > 1)
+
+    def _title_matches(
+        self,
+        release_title: str,
+        expected_title: str,
+        expected_author: Optional[str] = None,
+    ) -> bool:
         """
         Check if a release title matches the expected book title.
 
@@ -426,9 +455,16 @@ class ProwlarrSource(ReleaseSource):
           partial matches (e.g. "It" matching "You Like It Darker")
         - Longer titles (3+ words): substring containment and word overlap
 
+        ``expected_author`` (when known) is excluded from every word-level
+        comparison. Monographs are frequently titled "Artist Name: Subtitle",
+        and the artist is also credited in unrelated releases ("... by Rick
+        Darke, Piet Oudolf"), so matching on the author's name is a false
+        positive, not a signal.
+
         Args:
             release_title: The release title from the indexer
             expected_title: The expected book title
+            expected_author: The expected author, whose name is not a title match
 
         Returns:
             True if the title appears to match, False otherwise
@@ -453,12 +489,10 @@ class ProwlarrSource(ReleaseSource):
         if normalized_expected in normalized_release:
             return True
 
-        expected_words = [
-            w for w in normalized_expected.split()
-            if w not in self._STOP_WORDS
-        ]
+        author_tokens = self._author_name_tokens(expected_author)
+        expected_words = self._significant_words(normalized_expected, author_tokens)
         return self._long_title_matches(
-            normalized_release, normalized_expected, expected_words
+            normalized_release, normalized_expected, expected_words, author_tokens
         )
 
     def _short_title_matches(
@@ -501,30 +535,48 @@ class ProwlarrSource(ReleaseSource):
         self,
         normalized_release: str,
         normalized_expected: str,
-        expected_words: list
+        expected_words: list,
+        author_tokens: frozenset = frozenset(),
     ) -> bool:
         """
         Match longer titles (3+ significant words) using word overlap.
 
-        Checks substring containment, subtitle matching, and requires 60%+
-        of significant words to appear in the release.
+        Checks substring containment, subtitle matching, and requires 60%+ of
+        significant words to appear in the release - with at least two distinct
+        non-author words, so a lone generic word ("Landscapes") appearing in an
+        unrelated release is not enough.
         """
-        # Subtitle matching: split on ":" or " - " and check each part
+        # Subtitle matching: split on ":" or " - " and check each part. Skip a
+        # part that carries no significant words of its own (just stop words or
+        # the author's name) - "Piet Oudolf" as the pre-colon part of "Piet
+        # Oudolf: Landscapes in Landscapes" must not match on the author credit.
         subtitle_parts = re.split(r'[:\-]\s*', normalized_expected)
         for part in subtitle_parts:
             part = part.strip()
-            if part and part in normalized_release:
+            if not part or not self._significant_words(part, author_tokens):
+                continue
+            if part in normalized_release:
                 return True
 
-        # Word overlap: at least 60% of significant words must appear
         if not expected_words:
-            return True
+            return False
 
-        release_words = set(normalized_release.split())
-        matched = sum(1 for w in expected_words if w in release_words)
-        ratio = matched / len(expected_words)
+        release_words = {
+            w.strip(self._TOKEN_PUNCT) for w in normalized_release.split()
+        }
+        unique_expected = set(expected_words)
+        matched = sum(1 for w in unique_expected if w in release_words)
 
-        return ratio >= 0.6
+        if len(unique_expected) >= 2:
+            return matched >= 2 and matched / len(unique_expected) >= 0.6
+
+        # Only one significant word to go on - too weak on its own, so demand
+        # the phrase (minus the author's name) appear verbatim in the release.
+        phrase = " ".join(
+            w for w in normalized_expected.split()
+            if w.strip(self._TOKEN_PUNCT) not in author_tokens
+        ).strip()
+        return bool(phrase) and phrase in normalized_release
 
     def search_by_isbn(self, isbn: str, format_type: str = "ebook") -> List[Release]:
         """

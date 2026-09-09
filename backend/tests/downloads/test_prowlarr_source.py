@@ -802,6 +802,43 @@ class TestTitleMatches:
             "Completely Different Book Title", "The Great Gatsby"
         ) is False
 
+    # --- "Artist Name: Subtitle" monographs (author must not be a title match) ---
+
+    def test_long_title_rejects_author_credit_in_wrong_release(self, mock_prowlarr_source):
+        """
+        'Piet Oudolf: Landscapes in Landscapes' must NOT match a different book
+        that merely credits Piet Oudolf as a co-author.
+        """
+        assert mock_prowlarr_source._title_matches(
+            "Gardens of the High Line: Elevating the Nature of Modern Landscapes "
+            "by Rick Darke, Piet Oudolf [ENG / EPUB]",
+            "Piet Oudolf: Landscapes in Landscapes",
+            "Piet Oudolf",
+        ) is False
+
+    def test_long_title_accepts_monograph_subtitle_match(self, mock_prowlarr_source):
+        """The real book still matches on its subtitle, not the artist's name."""
+        assert mock_prowlarr_source._title_matches(
+            "Piet Oudolf - Landscapes in Landscapes (2011) [EPUB]",
+            "Piet Oudolf: Landscapes in Landscapes",
+            "Piet Oudolf",
+        ) is True
+
+    def test_long_title_author_credit_without_author_arg_still_matches(self, mock_prowlarr_source):
+        """
+        Without expected_author the guard can't tell the credit from the title;
+        this documents that passing the author is what fixes the false match.
+        """
+        assert mock_prowlarr_source._title_matches(
+            "Gardens of the High Line by Rick Darke, Piet Oudolf [EPUB]",
+            "Piet Oudolf: Landscapes in Landscapes",
+        ) is True
+
+    def test_long_title_punctuation_insensitive_token(self, mock_prowlarr_source):
+        """'oudolf:' in the expected title compares equal to 'oudolf'."""
+        tokens = mock_prowlarr_source._significant_words("piet oudolf: landscapes")
+        assert "oudolf" in tokens and "oudolf:" not in tokens
+
     # --- Empty/None edge cases ---
 
     def test_empty_expected_title(self, mock_prowlarr_source):
