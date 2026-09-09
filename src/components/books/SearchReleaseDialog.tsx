@@ -8,6 +8,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -55,10 +56,24 @@ export function SearchReleaseDialog({
   const [downloadStates, setDownloadStates] = useState<Map<string, string>>(new Map());
   const completedTasksRef = useRef<Set<number>>(new Set());
 
-  // Update active tab when formatType prop changes
+  // Manual search override, per format tab. `applied` is the term currently
+  // driving the search query (empty = automated search); `input` is the
+  // uncommitted text field value.
+  const [manualQuery, setManualQuery] = useState<{ ebook: string; audiobook: string }>({
+    ebook: '',
+    audiobook: '',
+  });
+  const [manualQueryInput, setManualQueryInput] = useState<{ ebook: string; audiobook: string }>({
+    ebook: '',
+    audiobook: '',
+  });
+
+  // Update active tab when formatType prop changes, and reset any manual search
   useEffect(() => {
     if (open) {
       setActiveTab(formatType);
+      setManualQuery({ ebook: '', audiobook: '' });
+      setManualQueryInput({ ebook: '', audiobook: '' });
     }
   }, [open, formatType]);
 
@@ -137,8 +152,9 @@ export function SearchReleaseDialog({
     isLoading: isSearchingEbooks,
     error: ebookSearchError,
   } = useQuery({
-    queryKey: ['downloads', 'search', bookId, 'ebook', sourceFilter],
-    queryFn: () => downloadsApi.searchReleases(bookId!, 'ebook', sourceFilter),
+    queryKey: ['downloads', 'search', bookId, 'ebook', sourceFilter, manualQuery.ebook],
+    queryFn: () =>
+      downloadsApi.searchReleases(bookId!, 'ebook', sourceFilter, manualQuery.ebook || undefined),
     enabled: open && !!bookId,
     staleTime: 5 * 60 * 1000, // Cache for 5 minutes
     retry: false, // Don't retry on timeout
@@ -151,8 +167,9 @@ export function SearchReleaseDialog({
     isLoading: isSearchingAudiobooks,
     error: audiobookSearchError,
   } = useQuery({
-    queryKey: ['downloads', 'search', bookId, 'audiobook', sourceFilter],
-    queryFn: () => downloadsApi.searchReleases(bookId!, 'audiobook', sourceFilter),
+    queryKey: ['downloads', 'search', bookId, 'audiobook', sourceFilter, manualQuery.audiobook],
+    queryFn: () =>
+      downloadsApi.searchReleases(bookId!, 'audiobook', sourceFilter, manualQuery.audiobook || undefined),
     enabled: open && !!bookId,
     staleTime: 5 * 60 * 1000, // Cache for 5 minutes
     retry: false, // Don't retry on timeout
@@ -332,6 +349,51 @@ export function SearchReleaseDialog({
     isSearching: boolean,
     searchError: Error | null
   ) => {
+    const currentInput = manualQueryInput[formatType];
+    const appliedQuery = manualQuery[formatType];
+
+    const searchBar = (
+      <div className="mb-4 space-y-2">
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            setManualQuery((prev) => ({ ...prev, [formatType]: currentInput.trim() }));
+          }}
+          className="flex gap-2"
+        >
+          <Input
+            placeholder={`Search Prowlarr for ${formatType} releases...`}
+            value={currentInput}
+            onChange={(e) =>
+              setManualQueryInput((prev) => ({ ...prev, [formatType]: e.target.value }))
+            }
+          />
+          <Button type="submit" disabled={isSearching || !currentInput.trim()}>
+            <Search className="h-4 w-4 mr-2" />
+            Search
+          </Button>
+          {appliedQuery && (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                setManualQuery((prev) => ({ ...prev, [formatType]: '' }));
+                setManualQueryInput((prev) => ({ ...prev, [formatType]: '' }));
+              }}
+            >
+              Reset
+            </Button>
+          )}
+        </form>
+        {appliedQuery && (
+          <p className="text-xs text-muted-foreground">
+            Showing manual search results for "{appliedQuery}"
+          </p>
+        )}
+      </div>
+    );
+
+    const body = (() => {
     if (isSearching) {
       return (
         <div className="space-y-4">
@@ -368,7 +430,9 @@ export function SearchReleaseDialog({
           <Search className="h-12 w-12 text-muted-foreground mb-4" />
           <h3 className="text-lg font-semibold mb-2">No Releases Found</h3>
           <p className="text-sm text-muted-foreground max-w-md">
-            We couldn't find any {formatType} releases for this book.
+            {appliedQuery
+              ? `No ${formatType} releases matched "${appliedQuery}". Try a different search term.`
+              : `We couldn't find any ${formatType} releases for this book. Try a manual search above.`}
           </p>
         </div>
       );
@@ -552,6 +616,14 @@ export function SearchReleaseDialog({
           );
         })}
       </div>
+    );
+    })();
+
+    return (
+      <>
+        {searchBar}
+        {body}
+      </>
     );
   };
 

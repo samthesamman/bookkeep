@@ -1253,10 +1253,20 @@ export interface DownloadLog {
 export const downloadsApi = {
   // Search for releases
   // source: 'prowlarr' | 'direct' | undefined (undefined = all sources)
-  searchReleases: (bookId: number, formatType: 'ebook' | 'audiobook', source?: 'prowlarr' | 'direct') => {
+  // `query` is a verbatim manual search term - when set it is sent straight to
+  // Prowlarr (bypassing title/author matching) and direct sources are skipped.
+  searchReleases: (
+    bookId: number,
+    formatType: 'ebook' | 'audiobook',
+    source?: 'prowlarr' | 'direct',
+    query?: string,
+  ) => {
     let url = `/api/downloads/search/${bookId}?format_type=${formatType}`;
     if (source) {
       url += `&source_filter=${source}`;
+    }
+    if (query) {
+      url += `&query=${encodeURIComponent(query)}`;
     }
     return apiRequest<SearchResponse>(url, { method: 'POST' });
   },

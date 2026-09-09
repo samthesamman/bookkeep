@@ -209,6 +209,64 @@ class TestSearch:
         assert mock_prowlarr_source.client.search_with_retry.call_count == 2
         assert len(results) == 1
 
+    def test_manual_query_is_sent_verbatim_as_only_query(self, mock_prowlarr_source):
+        mock_prowlarr_source.client.search_with_retry.return_value = []
+
+        mock_prowlarr_source.search(
+            title="Test Book",
+            author="Test Author",
+            isbn="1234567890",
+            format_type="ebook",
+            manual_query="  something else entirely  ",
+        )
+
+        # Only one query, the trimmed manual term - no title/isbn variants
+        assert mock_prowlarr_source.client.search_with_retry.call_count == 1
+        call_args = mock_prowlarr_source.client.search_with_retry.call_args
+        assert call_args.kwargs["query"] == "something else entirely"
+
+    def test_manual_query_skips_title_and_author_guards(self, mock_prowlarr_source):
+        # Release matches neither the book title nor the author - normally dropped
+        mock_prowlarr_source.client.search_with_retry.return_value = [
+            {
+                "title": "Completely Unrelated Release [EPUB]",
+                "downloadUrl": "http://download/1",
+                "size": 2048000,
+                "protocol": "torrent",
+                "categories": [{"id": 7000, "name": "Books/Ebook"}],
+            }
+        ]
+
+        results = mock_prowlarr_source.search(
+            title="Test Book",
+            author="Test Author",
+            format_type="ebook",
+            manual_query="unrelated",
+        )
+
+        assert len(results) == 1
+        assert results[0].title == "Completely Unrelated Release [EPUB]"
+
+    def test_manual_query_still_filters_by_format(self, mock_prowlarr_source):
+        # An audiobook result must still be dropped from an ebook search
+        mock_prowlarr_source.client.search_with_retry.return_value = [
+            {
+                "title": "Some Audiobook.m4b",
+                "downloadUrl": "http://download/1",
+                "size": 200000000,
+                "protocol": "torrent",
+                "categories": [{"id": 3030, "name": "Audio/Audiobook"}],
+            }
+        ]
+
+        results = mock_prowlarr_source.search(
+            title="Test Book",
+            format_type="ebook",
+            manual_query="some audiobook",
+        )
+
+        assert results == []
+
 
 class TestConvertToRelease:
     """Test conversion from Prowlarr results to Release objects"""

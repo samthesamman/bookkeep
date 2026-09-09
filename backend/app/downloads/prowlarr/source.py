@@ -77,7 +77,8 @@ class ProwlarrSource(ReleaseSource):
         title: str,
         author: Optional[str] = None,
         isbn: Optional[str] = None,
-        format_type: str = "ebook"
+        format_type: str = "ebook",
+        manual_query: Optional[str] = None
     ) -> List[Release]:
         """
         Search for book releases.
@@ -87,6 +88,10 @@ class ProwlarrSource(ReleaseSource):
             author: Book author (optional)
             isbn: ISBN (optional)
             format_type: "ebook" or "audiobook"
+            manual_query: Verbatim search term entered by the user. When set,
+                it is the only query sent to Prowlarr and the title/author
+                relevance guards are skipped - the user is deliberately
+                overriding the automated matching.
 
         Returns:
             List of Release objects
@@ -97,8 +102,12 @@ class ProwlarrSource(ReleaseSource):
         else:
             categories = [ProwlarrClient.CATEGORY_EBOOK]
 
-        # Build search queries (try ISBN first, then title variations)
-        queries = build_search_queries(title, author, isbn)
+        # Build search queries (try ISBN first, then title variations).
+        # A manual query bypasses the variant builder entirely.
+        if manual_query and manual_query.strip():
+            queries = [manual_query.strip()]
+        else:
+            queries = build_search_queries(title, author, isbn)
 
         all_results = []
         seen_urls = set()  # Track unique results by download URL
@@ -173,10 +182,15 @@ class ProwlarrSource(ReleaseSource):
             )
             return []
 
-        # Convert to Release objects with author validation
+        # Convert to Release objects with author validation. For a manual query
+        # the user is overriding matching, so don't drop results that fail the
+        # title/author guards - just return what Prowlarr found.
+        is_manual = bool(manual_query and manual_query.strip())
+        validate_author = None if is_manual else author
+        validate_title = None if is_manual else title
         releases = []
         for result in all_results:
-            release = self._convert_to_release(result, format_type, author, title)
+            release = self._convert_to_release(result, format_type, validate_author, validate_title)
             if release:
                 releases.append(release)
 

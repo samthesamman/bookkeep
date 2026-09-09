@@ -153,6 +153,7 @@ async def search_releases(
     book_id: int,
     format_type: str,  # "ebook" or "audiobook"
     source_filter: Optional[str] = None,  # "prowlarr", "direct", or None for all
+    query: Optional[str] = None,  # verbatim manual search term (Prowlarr only)
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -163,9 +164,13 @@ async def search_releases(
         book_id: Database ID of the book
         format_type: "ebook" or "audiobook"
         source_filter: Filter by source - "prowlarr", "direct", or None for all
+        query: Manual search term. When provided, it is sent verbatim to
+            Prowlarr (bypassing title/author matching) and direct sources are
+            skipped.
 
     Returns a list of available releases with quality scores and details.
     """
+    manual_query = query.strip() if query and query.strip() else None
     # Get the book
     book = db.query(Book).filter(Book.id == book_id).first()
     if not book:
@@ -179,7 +184,12 @@ async def search_releases(
 
     # Determine which sources to search
     search_prowlarr = source_filter is None or source_filter == "prowlarr"
-    search_direct = (source_filter is None or source_filter == "direct") and direct_enabled
+    # A manual query is a Prowlarr-only override; don't fan it out to direct sources.
+    search_direct = (
+        (source_filter is None or source_filter == "direct")
+        and direct_enabled
+        and manual_query is None
+    )
 
     # Search Prowlarr if requested
     if search_prowlarr:
@@ -223,7 +233,8 @@ async def search_releases(
                     title=book.title,
                     author=book.author,
                     isbn=book.isbn,
-                    format_type=format_type
+                    format_type=format_type,
+                    manual_query=manual_query
                 )
 
                 # Filter releases to only include protocols with configured clients
@@ -301,6 +312,7 @@ async def search_releases(
         book_id=book_id,
         format_type=format_type,
         source_filter=source_filter,
+        manual_query=manual_query,
         releases_found=len(release_info)
     )
 
