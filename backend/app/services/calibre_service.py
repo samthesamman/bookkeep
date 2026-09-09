@@ -457,7 +457,7 @@ def _match_against_catalog(
             author_overlap=bool(want_author and cand_auth and (want_author & cand_auth)),
         )
     else:
-        logger.info(
+        logger.debug(
             "calibre_fuzzy_match_not_found",
             query_title=title,
             query_author=author,
