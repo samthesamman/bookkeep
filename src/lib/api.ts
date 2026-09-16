@@ -1441,6 +1441,10 @@ export interface CalibreSettings {
   valid: boolean;
   book_count: number | null;
   error: string | null;
+  agent_enabled: boolean;
+  agent_url: string | null;
+  agent_api_key: string | null;
+  agent_convert_format: string | null;
 }
 
 /** Fields added by the local metadata overlay (calibre_book_links). */
@@ -1618,7 +1622,14 @@ async function authedDataUrl(endpoint: string): Promise<string> {
 export const calibreApi = {
   getSettings: () => apiRequest<CalibreSettings>('/api/calibre/settings'),
 
-  updateSettings: (data: { library_path: string | null; enabled: boolean }) =>
+  updateSettings: (data: {
+    library_path: string | null;
+    enabled: boolean;
+    agent_enabled: boolean;
+    agent_url: string | null;
+    agent_api_key: string | null;
+    agent_convert_format: string | null;
+  }) =>
     apiRequest<CalibreSettings>('/api/calibre/settings', {
       method: 'PUT',
       body: JSON.stringify(data),
@@ -1628,6 +1639,12 @@ export const calibreApi = {
     apiRequest<{ success: boolean; book_count: number | null; error: string | null }>(
       '/api/calibre/test',
       { method: 'POST', body: JSON.stringify({ library_path }) },
+    ),
+
+  testAgent: (agent_url: string, agent_api_key: string) =>
+    apiRequest<{ success: boolean; error: string | null }>(
+      '/api/calibre/agent-settings/test',
+      { method: 'POST', body: JSON.stringify({ agent_url, agent_api_key }) },
     ),
 
   getBooks: (params: { search?: string; sort?: CalibreSort; page?: number; pageSize?: number }) => {

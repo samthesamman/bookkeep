@@ -434,6 +434,13 @@ class CalibreSettings(Base):
     id = Column(Integer, primary_key=True, index=True)
     library_path = Column(String, nullable=True)  # directory containing metadata.db
     enabled = Column(Boolean, default=False)
+    # Optional companion service (see calibre-cli/) that mirrors bookkeep's
+    # metadata/cover onto a real running Calibre Content Server, since this
+    # library is normally reached read-only over a network mount.
+    agent_enabled = Column(Boolean, default=False)
+    agent_url = Column(String, nullable=True)
+    agent_api_key = Column(String, nullable=True)
+    agent_convert_format = Column(String, nullable=True)  # e.g. "epub"; blank = skip conversion
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 

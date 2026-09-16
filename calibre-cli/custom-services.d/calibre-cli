@@ -1,0 +1,8 @@
+#!/usr/bin/with-contenv bash
+# s6-supervised alongside Calibre's own GUI/Content Server services — see
+# https://docs.linuxserver.io/general/container-customization/#custom-services
+# `with-contenv` makes this container's environment (AGENT_API_KEY,
+# CALIBRE_SERVER_URL, etc. from docker-compose) visible here. Runs as the
+# same abc user (mapped from PUID/PGID) that owns the library files.
+
+exec s6-setuidgid abc /agent/venv/bin/uvicorn app:app --host 0.0.0.0 --port 8100 --app-dir /agent

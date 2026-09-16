@@ -1,0 +1,46 @@
+# This container REPLACES your linuxserver/calibre container: same desktop
+# GUI, same Content Server, plus a small agent API bookkeep talks to.
+# Point CALIBRE_CONFIG_HOST_PATH at your EXISTING linuxserver/calibre
+# /config directory to migrate straight across — same library, same users,
+# same settings, nothing to reconfigure.
+#
+# Copy .env.example to .env alongside this file and fill it in. Stop and
+# remove your old linuxserver/calibre container first (nothing else can
+# hold the same /config directory open), then:
+#   docker compose up -d --build
+
+services:
+  calibre-cli:
+    image: calibre-cli:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: calibre-cli
+    environment:
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      TZ: ${TZ:-Etc/UTC}
+      # Optional HTTP basic auth for the GUI, same as your old container.
+      PASSWORD: ${PASSWORD:-}
+      # Agent talks to the Content Server over loopback — they're in the
+      # same container now.
+      CALIBRE_SERVER_URL: http://localhost:8081
+      # Set these once you've enabled the Content Server + auth from
+      # Calibre's own Preferences GUI (see README's first-run step) — not
+      # configurable from this compose file.
+      CALIBRE_SERVER_USERNAME: ${CALIBRE_SERVER_USERNAME:-}
+      CALIBRE_SERVER_PASSWORD: ${CALIBRE_SERVER_PASSWORD:-}
+      CALIBRE_LIBRARY_ID: ${CALIBRE_LIBRARY_ID:-}
+      CALIBRE_LIBRARY_LOCAL_PATH: ${CALIBRE_LIBRARY_LOCAL_PATH:-/config/Calibre Library}
+      AGENT_API_KEY: ${AGENT_API_KEY:?set AGENT_API_KEY in .env — this is the shared secret bookkeep authenticates with}
+    volumes:
+      # Your EXISTING Calibre config + library directory, reused directly.
+      - ${CALIBRE_CONFIG_HOST_PATH:?set CALIBRE_CONFIG_HOST_PATH in .env, e.g. /path/to/existing/calibre/config}:/config
+    ports:
+      - "8080:8080"            # Desktop GUI (HTTP, for use behind your own reverse proxy)
+      - "8181:8181"            # Desktop GUI (HTTPS, direct access)
+      - "8081:8081"            # Calibre Content Server
+      - "127.0.0.1:8100:8100"  # Agent API — bookkeep only, keep off the public internet
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
-import { Save, TestTube, CheckCircle, XCircle, Library } from 'lucide-react';
+import { Save, TestTube, CheckCircle, XCircle, Library, Server, Eye, EyeOff } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -17,6 +18,14 @@ export default function CalibreSettings() {
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
 
+  const [agentEnabled, setAgentEnabled] = useState(false);
+  const [agentUrl, setAgentUrl] = useState('');
+  const [agentApiKey, setAgentApiKey] = useState('');
+  const [showAgentApiKey, setShowAgentApiKey] = useState(false);
+  const [agentConvertFormat, setAgentConvertFormat] = useState('');
+  const [agentTesting, setAgentTesting] = useState(false);
+  const [agentTestResult, setAgentTestResult] = useState<{ success: boolean; message: string } | null>(null);
+
   const { data: settings, isLoading } = useQuery({
     queryKey: ['calibre-settings'],
     queryFn: () => calibreApi.getSettings(),
@@ -31,6 +40,10 @@ export default function CalibreSettings() {
     if (settings) {
       setLibraryPath(settings.library_path || '');
       setEnabled(settings.enabled);
+      setAgentEnabled(settings.agent_enabled);
+      setAgentUrl(settings.agent_url || '');
+      setAgentApiKey(settings.agent_api_key || '');
+      setAgentConvertFormat(settings.agent_convert_format || '');
     }
   }, [settings]);
 
@@ -49,7 +62,14 @@ export default function CalibreSettings() {
 
   const saveMutation = useMutation({
     mutationFn: () =>
-      calibreApi.updateSettings({ library_path: libraryPath.trim() || null, enabled }),
+      calibreApi.updateSettings({
+        library_path: libraryPath.trim() || null,
+        enabled,
+        agent_enabled: agentEnabled,
+        agent_url: agentUrl.trim() || null,
+        agent_api_key: agentApiKey.trim() || null,
+        agent_convert_format: agentConvertFormat.trim() || null,
+      }),
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['calibre-settings'] });
       queryClient.invalidateQueries({ queryKey: ['calibre-books'] });
@@ -65,6 +85,32 @@ export default function CalibreSettings() {
       toast.error('Failed to save settings', { description: error.message });
     },
   });
+
+  const handleTestAgent = async () => {
+    if (!agentUrl.trim() || !agentApiKey.trim()) {
+      toast.error('Enter the agent URL and API key first');
+      return;
+    }
+    setAgentTesting(true);
+    setAgentTestResult(null);
+    try {
+      const result = await calibreApi.testAgent(agentUrl.trim(), agentApiKey.trim());
+      if (result.success) {
+        setAgentTestResult({ success: true, message: 'Connected' });
+        toast.success('Connected to calibre-cli');
+      } else {
+        const msg = result.error || 'Could not reach the calibre-cli';
+        setAgentTestResult({ success: false, message: msg });
+        toast.error(msg);
+      }
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : 'Test failed';
+      setAgentTestResult({ success: false, message: msg });
+      toast.error('Test failed', { description: msg });
+    } finally {
+      setAgentTesting(false);
+    }
+  };
 
   const handleTest = async () => {
     if (!libraryPath.trim()) {
@@ -193,6 +239,105 @@ export default function CalibreSettings() {
             </div>
           </div>
         )}
+
+        <div className="space-y-4 rounded-lg border border-border p-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Server className="h-4 w-4 text-muted-foreground" />
+              <div className="space-y-1">
+                <Label className="text-foreground font-medium">Calibre server</Label>
+                <p className="text-sm text-muted-foreground">
+                  Optional. Push bookkeep's metadata and cover into your real Calibre library via a{' '}
+                  <span className="font-mono text-xs">calibre-cli</span> companion service, then
+                  optionally convert to a target format. Calibre stays untouched if this is left off.
+                </p>
+              </div>
+            </div>
+            <Switch checked={agentEnabled} onCheckedChange={setAgentEnabled} />
+          </div>
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-2">
+              <Label htmlFor="calibre-cli-url" className="text-foreground">
+                Agent URL
+              </Label>
+              <Input
+                id="calibre-cli-url"
+                value={agentUrl}
+                onChange={(e) => setAgentUrl(e.target.value)}
+                placeholder="http://calibre-cli.local:8100"
+                disabled={!agentEnabled}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="calibre-cli-key" className="text-foreground">
+                Agent API Key
+              </Label>
+              <div className="relative">
+                <Input
+                  id="calibre-cli-key"
+                  type={showAgentApiKey ? 'text' : 'password'}
+                  value={agentApiKey}
+                  onChange={(e) => setAgentApiKey(e.target.value)}
+                  placeholder="shared secret"
+                  disabled={!agentEnabled}
+                  className="pr-10"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowAgentApiKey((v) => !v)}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  tabIndex={-1}
+                >
+                  {showAgentApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="calibre-cli-convert" className="text-foreground">
+              Convert to format after update (optional)
+            </Label>
+            <Input
+              id="calibre-cli-convert"
+              value={agentConvertFormat}
+              onChange={(e) => setAgentConvertFormat(e.target.value)}
+              placeholder="e.g. epub"
+              disabled={!agentEnabled}
+              className="max-w-[200px]"
+            />
+            <p className="text-xs text-muted-foreground">
+              Leave blank to only push metadata/cover and skip conversion.
+            </p>
+          </div>
+
+          {agentTestResult && (
+            <div
+              className={`flex items-center gap-2 text-sm p-3 rounded-lg ${
+                agentTestResult.success
+                  ? 'bg-green-500/10 border border-green-500/30 text-green-500'
+                  : 'bg-red-500/10 border border-red-500/30 text-red-500'
+              }`}
+            >
+              {agentTestResult.success ? (
+                <CheckCircle className="h-4 w-4" />
+              ) : (
+                <XCircle className="h-4 w-4" />
+              )}
+              <span>{agentTestResult.message}</span>
+            </div>
+          )}
+
+          <Button
+            variant="outline"
+            onClick={handleTestAgent}
+            disabled={agentTesting || !agentEnabled || !agentUrl.trim() || !agentApiKey.trim()}
+          >
+            <TestTube className="h-4 w-4 mr-2" />
+            {agentTesting ? 'Testing...' : 'Test Connection'}
+          </Button>
+        </div>
 
         {testResult && (
           <div

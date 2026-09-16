@@ -2,7 +2,7 @@
 from typing import Any, Optional
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -11,6 +11,7 @@ from app import models
 from app.auth import get_current_user, require_admin
 from app.database import get_db
 from app.services import calibre_service, calibre_link_service
+from app.services.calibre_agent_service import CalibreAgentClient
 
 logger = structlog.get_logger()
 
@@ -23,6 +24,10 @@ router = APIRouter()
 class CalibreSettingsUpdate(BaseModel):
     library_path: Optional[str] = None
     enabled: bool = False
+    agent_enabled: bool = False
+    agent_url: Optional[str] = None
+    agent_api_key: Optional[str] = None
+    agent_convert_format: Optional[str] = None
 
 
 class CalibreSettingsResponse(BaseModel):
@@ -32,6 +37,10 @@ class CalibreSettingsResponse(BaseModel):
     valid: bool
     book_count: Optional[int] = None
     error: Optional[str] = None
+    agent_enabled: bool = False
+    agent_url: Optional[str] = None
+    agent_api_key: Optional[str] = None
+    agent_convert_format: Optional[str] = None
 
 
 class CalibreTestRequest(BaseModel):
@@ -41,6 +50,16 @@ class CalibreTestRequest(BaseModel):
 class CalibreTestResponse(BaseModel):
     success: bool
     book_count: Optional[int] = None
+    error: Optional[str] = None
+
+
+class CalibreAgentTestRequest(BaseModel):
+    agent_url: str
+    agent_api_key: str
+
+
+class CalibreAgentTestResponse(BaseModel):
+    success: bool
     error: Optional[str] = None
 
 
@@ -132,6 +151,10 @@ async def get_settings(
         valid=valid,
         book_count=count,
         error=error,
+        agent_enabled=row.agent_enabled,
+        agent_url=row.agent_url,
+        agent_api_key=row.agent_api_key,
+        agent_convert_format=row.agent_convert_format,
     )
 
 
@@ -144,11 +167,15 @@ async def update_settings(
     row = _get_or_create(db)
     row.library_path = (data.library_path or "").strip() or None
     row.enabled = data.enabled
+    row.agent_enabled = data.agent_enabled
+    row.agent_url = (data.agent_url or "").strip() or None
+    row.agent_api_key = (data.agent_api_key or "").strip() or None
+    row.agent_convert_format = (data.agent_convert_format or "").strip() or None
     db.commit()
     db.refresh(row)
 
     valid, count, error = _probe(row.library_path)
-    logger.info("calibre_settings_updated", enabled=row.enabled, valid=valid)
+    logger.info("calibre_settings_updated", enabled=row.enabled, valid=valid, agent_enabled=row.agent_enabled)
     return CalibreSettingsResponse(
         id=row.id,
         library_path=row.library_path,
@@ -156,6 +183,10 @@ async def update_settings(
         valid=valid,
         book_count=count,
         error=error,
+        agent_enabled=row.agent_enabled,
+        agent_url=row.agent_url,
+        agent_api_key=row.agent_api_key,
+        agent_convert_format=row.agent_convert_format,
     )
 
 
@@ -166,6 +197,64 @@ async def test_library(
 ):
     valid, count, error = _probe(data.library_path.strip())
     return CalibreTestResponse(success=valid, book_count=count, error=error)
+
+
+@router.post("/agent-settings/test", response_model=CalibreAgentTestResponse)
+async def test_agent(
+    data: CalibreAgentTestRequest,
+    _: models.User = Depends(require_admin),
+):
+    """Ping the calibre-cli's /health endpoint with the given (possibly unsaved) credentials."""
+    client = CalibreAgentClient(base_url=data.agent_url.strip(), api_key=data.agent_api_key.strip())
+    success, error = await client.health_check()
+    return CalibreAgentTestResponse(success=success, error=error)
+
+
+def _calibre_agent_sync_job(db: Session, calibre_book_id: int, book: models.Book):
+    """Build a closure that pushes ``book``'s metadata/cover to calibre-cli, if configured.
+
+    Reads settings and book fields now, while the DB session is open, and
+    returns a plain async callable with no DB/ORM references attached — safe
+    to hand to ``BackgroundTasks`` regardless of when the request's session is
+    torn down. Returns ``None`` when the agent isn't configured/enabled.
+    """
+    settings = db.query(models.CalibreSettings).first()
+    client = CalibreAgentClient.from_settings(settings)
+    if client is None:
+        return None
+
+    fields: dict[str, Any] = {}
+    if book.title:
+        fields["title"] = book.title
+    if book.author:
+        fields["authors"] = book.author
+    if book.description:
+        fields["comments"] = book.description
+    if book.publisher:
+        fields["publisher"] = book.publisher
+    if book.isbn:
+        fields["identifiers"] = {"isbn": book.isbn}
+    if book.series:
+        fields["series"] = book.series
+    if book.series_position:
+        fields["series_index"] = book.series_position
+    if book.rating:
+        fields["rating"] = book.rating
+    genres = _as_genre_list(book.genres)
+    if genres:
+        fields["tags"] = genres
+
+    cover_url = book.cover_url
+    convert_format = (settings.agent_convert_format or "").strip() or None
+
+    async def _job() -> None:
+        await client.push_metadata(calibre_book_id, fields)
+        if cover_url:
+            await client.push_cover(calibre_book_id, cover_url)
+        if convert_format:
+            await client.trigger_convert(calibre_book_id, convert_format)
+
+    return _job
 
 
 # ---------------------------------------------------------------------------
@@ -396,6 +485,7 @@ async def _resolve_book_for_link(
 async def set_book_link(
     book_id: int,
     data: LinkRequest,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     _: models.User = Depends(require_admin),
 ):
@@ -441,6 +531,10 @@ async def set_book_link(
     except Exception as exc:  # linking still succeeded
         db.rollback()
         logger.warning("calibre_manual_link_enrich_failed", book_id=book.id, error=str(exc))
+
+    job = _calibre_agent_sync_job(db, book_id, book)
+    if job:
+        background_tasks.add_task(job)
 
     return LinkResponse(
         linked_book_id=book.id,
@@ -516,6 +610,7 @@ async def clear_book_link(
 @router.post("/books/{book_id}/refresh-metadata", response_model=LinkResponse)
 async def refresh_book_metadata(
     book_id: int,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     _: models.User = Depends(require_admin),
 ):
@@ -536,6 +631,10 @@ async def refresh_book_metadata(
     except Exception as exc:
         db.rollback()
         raise HTTPException(status_code=502, detail=f"Metadata refresh failed: {exc}")
+
+    job = _calibre_agent_sync_job(db, book_id, book)
+    if job:
+        background_tasks.add_task(job)
 
     return LinkResponse(
         linked_book_id=book.id,
@@ -724,6 +823,7 @@ async def metadata_candidates(
 async def apply_metadata(
     book_id: int,
     body: ApplyMetadataRequest,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     _: models.User = Depends(require_admin),
 ):
@@ -790,6 +890,10 @@ async def apply_metadata(
     db.commit()
     db.refresh(book)
     logger.info("calibre_metadata_applied", book_id=book_id, source=body.source, fields=body.fields)
+
+    job = _calibre_agent_sync_job(db, book_id, book)
+    if job:
+        background_tasks.add_task(job)
 
     return ApplyMetadataResponse(
         linked_book_id=book.id,
