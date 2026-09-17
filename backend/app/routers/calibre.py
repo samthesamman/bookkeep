@@ -230,8 +230,6 @@ def _calibre_agent_sync_job(db: Session, calibre_book_id: int, book: models.Book
         fields["authors"] = book.author
     if book.description:
         fields["comments"] = book.description
-    if book.publisher:
-        fields["publisher"] = book.publisher
     if book.isbn:
         fields["identifiers"] = {"isbn": book.isbn}
     if book.series:
