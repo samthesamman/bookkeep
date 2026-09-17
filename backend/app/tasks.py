@@ -549,9 +549,17 @@ async def reconcile_calibre_library():
         if (now_ts - _LAST_LINK_MAINTENANCE) >= LINK_MAINTENANCE_INTERVAL:
             _LAST_LINK_MAINTENANCE = now_ts
             try:
-                calibre_link_service.heal_stale_links(db, library_path)
+                healed = calibre_link_service.heal_stale_links(db, library_path)
                 calibre_link_service.backfill_fuzzy_links(db, library_path)
                 calibre_link_service.sync_availability_flags(db, library_path)
+                if healed:
+                    # A healed link may have reset a Book's ebook_available flag
+                    # or reopened a request as not_found - drop the cached
+                    # request-status views so book pages stop showing it as
+                    # available right away instead of waiting on the TTL.
+                    from app.cache import clear_cache_pattern
+                    await clear_cache_pattern("requests_by_hardcover:*")
+                    await clear_cache_pattern("requests_by_hardcover_batch:*")
             except Exception as e:
                 logger.error("calibre_link_maintenance_error", error=str(e))
                 db.rollback()

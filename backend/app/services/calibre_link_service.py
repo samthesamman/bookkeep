@@ -12,7 +12,7 @@ from typing import Iterable, Optional
 import structlog
 from sqlalchemy.orm import Session, joinedload
 
-from app.models import Book, CalibreBookLink
+from app.models import Book, BookRequest, CalibreBookLink
 from app.services import calibre_service
 
 logger = structlog.get_logger()
@@ -306,9 +306,11 @@ def heal_stale_links(db: Session, library_path: str) -> int:
 
     Calibre reassigns ids on delete + re-add. When the stored id is gone we try
     to find the book again by its snapshotted ISBN/title; failing that the book
-    was actually removed from Calibre, so the link is dropped and the Book's
-    ``ebook_available`` flag is cleared (it otherwise never resets to False) so
-    it stops showing as owned.
+    was actually removed from Calibre, so the link is dropped, the Book's
+    ``ebook_available`` flag is cleared (it otherwise never resets to False),
+    and any request that was flipped to "available" from this same library
+    entry is reopened as "not_found" so it stops showing as owned and can be
+    re-requested/re-matched later.
     """
     links = db.query(CalibreBookLink).options(joinedload(CalibreBookLink.book)).all()
     if not links:
@@ -342,8 +344,20 @@ def heal_stale_links(db: Session, library_path: str) -> int:
                 "calibre_link_repointed", book_id=link.book_id, calibre_book_id=new_id
             )
         else:
-            if link.book is not None and link.book.ebook_available:
-                link.book.ebook_available = False
+            if link.book is not None:
+                if link.book.ebook_available:
+                    link.book.ebook_available = False
+                stale_request = (
+                    db.query(BookRequest)
+                    .filter(
+                        BookRequest.book_id == link.book_id,
+                        BookRequest.format == "ebook",
+                        BookRequest.status == "available",
+                    )
+                    .first()
+                )
+                if stale_request is not None:
+                    stale_request.status = "not_found"
             db.delete(link)
             healed += 1
             logger.info("calibre_link_removed_stale", book_id=link.book_id)

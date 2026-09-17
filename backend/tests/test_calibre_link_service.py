@@ -5,7 +5,7 @@ import pytest
 from sqlalchemy.orm import Session
 
 from app.database import SessionLocal, engine, Base
-from app.models import Book, CalibreBookLink
+from app.models import Book, BookRequest, CalibreBookLink, User
 from app.services import calibre_link_service as cls
 
 _SCHEMA = """
@@ -113,6 +113,22 @@ def test_heal_removes_stale_link(db, library):
     assert db.query(CalibreBookLink).count() == 0
     db.refresh(b)
     assert b.ebook_available is False
+
+
+def test_heal_reopens_available_request_as_not_found(db, library):
+    b = _book(db, title="Gone", author="X", ebook_available=True)
+    user = User(email="u@example.com", username="u")
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    req = BookRequest(book_id=b.id, user_id=user.id, format="ebook", status="available")
+    db.add(req)
+    cls.upsert_link(
+        db, calibre_book_id=555, book_id=b.id, source="download", confirmed=True, calibre_title="Gone"
+    )
+    cls.heal_stale_links(db, library)
+    db.refresh(req)
+    assert req.status == "not_found"
 
 
 def test_heal_repoints_by_isbn(db, library):
