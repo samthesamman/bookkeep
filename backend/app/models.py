@@ -440,7 +440,7 @@ class CalibreSettings(Base):
     agent_enabled = Column(Boolean, default=False)
     agent_url = Column(String, nullable=True)
     agent_api_key = Column(String, nullable=True)
-    agent_convert_format = Column(String, nullable=True)  # e.g. "epub"; blank = skip conversion
+    agent_convert_format = Column(String, nullable=True)  # e.g. "epub"; blank = skip embed-metadata step
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 

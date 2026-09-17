@@ -2,17 +2,17 @@
 
 Your Calibre instance, replacing linuxserver/calibre: the same desktop GUI
 (browsable over the web), the same Content Server, **plus** a small HTTP API
-that bookkeep's backend calls to push metadata/cover updates and trigger
-format conversion — neither of which bookkeep's own backend can safely do
-itself, since it normally only has **read-only** network access to a
-library (see the main repo's `backend/app/services/calibre_service.py`).
+that bookkeep's backend calls to push metadata/cover updates and re-embed
+that metadata into the book files on disk — neither of which bookkeep's own
+backend can safely do itself, since it normally only has **read-only**
+network access to a library (see the main repo's
+`backend/app/services/calibre_service.py`).
 
 This is built `FROM lscr.io/linuxserver/calibre` rather than reimplementing
 its GUI/VNC stack from scratch. Calibre itself (GUI, Content Server,
-`calibredb`, `ebook-convert`) all come from that base image, unmodified —
-this only adds one extra small service (the agent API) alongside it, using
-linuxserver's own supported extension mechanism
-(`/custom-services.d`, see
+`calibredb`) all come from that base image, unmodified — this only adds one
+extra small service (the agent API) alongside it, using linuxserver's own
+supported extension mechanism (`/custom-services.d`, see
 [Container Customization](https://docs.linuxserver.io/general/container-customization/)).
 It does not touch how the GUI or Content Server work.
 
@@ -24,24 +24,19 @@ It does not touch how the GUI or Content Server work.
 bookkeep backend --HTTP(X-Api-Key)-->  agent API (:8100)                     │
                         │        |                                           │
                         │        +--calibredb (loopback, authed)-->  Content Server (:8081) --> /config/Calibre Library
-                        │        |                                                                    ^
-                        │        +--ebook-convert (local file)--> calibredb add_format ----------------+
                         └────────────────────────────────────────────────────┘
                                  ^                        ^
 desktop GUI (browser) --HTTP--/  (:8080 / :8181, unchanged from linuxserver/calibre)
 ```
 
-- **Writes** (`set_metadata`, `add_format`) go through the Content Server via
-  `calibredb --with-library=http://localhost:8081`, Calibre's own supported
-  way to let multiple writers (its own GUI included) touch a library safely
-  — the agent never opens `metadata.db` itself.
-- **Conversion** needs local file access (`ebook-convert` has no remote
-  mode), so it reads a book's existing format straight off
-  `/config/Calibre Library` inside the same container, then registers the
-  converted file back through the Content Server.
-- The desktop **GUI** (`8080` HTTP / `8181` HTTPS) is exactly what
-  linuxserver/calibre already gives you — unrelated to and unaffected by the
-  agent.
+Everything the agent does — pushing metadata, pushing a cover, re-embedding
+metadata into book files — goes through the Content Server via
+`calibredb --with-library=http://localhost:8081`, Calibre's own supported
+way to let multiple writers (its own GUI included) touch a library safely.
+The agent never opens `metadata.db` itself and never touches book files
+directly — `calibredb embed_metadata` does that server-side. The desktop
+**GUI** (`8080` HTTP / `8181` HTTPS) is exactly what linuxserver/calibre
+already gives you — unrelated to and unaffected by the agent.
 
 ## Ports
 
@@ -94,7 +89,7 @@ All except `/health` require `X-Api-Key: <AGENT_API_KEY>`.
 - `GET /health`
 - `POST /books/{calibre_id}/metadata` — body `{"fields": {"title": "...", "authors": "...", "comments": "...", "tags": ["..."], "identifiers": {"isbn": "..."}, ...}}`
 - `POST /books/{calibre_id}/cover` — raw image bytes as the request body
-- `POST /books/{calibre_id}/convert` — body `{"target_format": "epub"}`
+- `POST /books/{calibre_id}/convert` — body `{"target_format": "epub"}` (optional). Runs `calibredb embed_metadata`, re-embedding the book's current metadata into its existing file(s) in place — not a format conversion, despite the path name (kept for compatibility). `target_format` restricts it to one format via `--only-formats`; omit it to re-embed into every format the book has. Always runs, even if that format already exists — the whole point is refreshing what's already there.
 
 ## Environment variables
 
@@ -107,7 +102,7 @@ All except `/health` require `X-Api-Key: <AGENT_API_KEY>`.
 | `CALIBRE_LIBRARY_ID` | no | Only needed if you host more than one library |
 | `AGENT_API_KEY` | yes | Shared secret bookkeep sends as `X-Api-Key` |
 | `CALIBREDB_TIMEOUT_SECONDS` | no (default 60) | Timeout for metadata/cover calibredb calls |
-| `CONVERT_TIMEOUT_SECONDS` | no (default 300) | Timeout for `ebook-convert` |
+| `EMBED_METADATA_TIMEOUT_SECONDS` | no (default 300) | Timeout for `calibredb embed_metadata` |
 
 There is no TLS on the agent's own port — put it behind your own network
 controls (VPN, firewall, reverse proxy) the same way you would anything

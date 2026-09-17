@@ -31,7 +31,6 @@ services:
       CALIBRE_SERVER_USERNAME: ${CALIBRE_SERVER_USERNAME:-}
       CALIBRE_SERVER_PASSWORD: ${CALIBRE_SERVER_PASSWORD:-}
       CALIBRE_LIBRARY_ID: ${CALIBRE_LIBRARY_ID:-}
-      CALIBRE_LIBRARY_LOCAL_PATH: ${CALIBRE_LIBRARY_LOCAL_PATH:-/config/Calibre Library}
       AGENT_API_KEY: ${AGENT_API_KEY:?set AGENT_API_KEY in .env — this is the shared secret bookkeep authenticates with}
     volumes:
       # Your EXISTING Calibre config + library directory, reused directly.

@@ -249,7 +249,8 @@ export default function CalibreSettings() {
                 <p className="text-sm text-muted-foreground">
                   Optional. Push bookkeep's metadata and cover into your real Calibre library via a{' '}
                   <span className="font-mono text-xs">calibre-cli</span> companion service, then
-                  optionally convert to a target format. Calibre stays untouched if this is left off.
+                  optionally re-embed that metadata into the book file itself. Calibre stays untouched
+                  if this is left off.
                 </p>
               </div>
             </div>
@@ -297,7 +298,7 @@ export default function CalibreSettings() {
 
           <div className="space-y-2">
             <Label htmlFor="calibre-cli-convert" className="text-foreground">
-              Convert to format after update (optional)
+              Re-embed metadata into file format after update (optional)
             </Label>
             <Input
               id="calibre-cli-convert"
@@ -308,7 +309,9 @@ export default function CalibreSettings() {
               className="max-w-[200px]"
             />
             <p className="text-xs text-muted-foreground">
-              Leave blank to only push metadata/cover and skip conversion.
+              Bakes the updated title/author/cover/etc. directly into the book file of this format
+              (calibredb embed_metadata) — always runs, even if the book already has this format.
+              Leave blank to only push metadata/cover to Calibre and skip this step.
             </p>
           </div>
 
