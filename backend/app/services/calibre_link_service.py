@@ -367,6 +367,54 @@ def heal_stale_links(db: Session, library_path: str) -> int:
     return healed
 
 
+def reopen_stale_available_requests(db: Session, library_path: str) -> int:
+    """Reopen ebook requests stuck on "available" whose book isn't in Calibre.
+
+    ``heal_stale_links`` only catches a book at the moment its link goes stale;
+    a request left over from before that reset existed (or from any other path
+    that set ``ebook_available``/status without ever creating a link) has no
+    link left to trigger it and would otherwise stay "available" forever. This
+    re-checks every such request directly - live fuzzy match first, then a
+    persisted link - and reopens it as "not_found" when neither finds the book.
+    """
+    reqs = (
+        db.query(BookRequest)
+        .options(joinedload(BookRequest.book))
+        .filter(BookRequest.format == "ebook", BookRequest.status == "available")
+        .all()
+    )
+    reqs = [r for r in reqs if r.book]
+    if not reqs:
+        return 0
+
+    try:
+        matches = calibre_service.match_books(
+            library_path, [(r.book.title, r.book.author, r.book.isbn) for r in reqs]
+        )
+    except calibre_service.CalibreError as exc:
+        logger.warning("calibre_reopen_stale_requests_probe_failed", error=str(exc))
+        return 0
+
+    reopened = 0
+    for req, calibre_id in zip(reqs, matches):
+        if calibre_id is None:
+            calibre_id = linked_library_book_id(db, library_path, req.book_id)
+        if calibre_id is not None:
+            continue
+        req.status = "not_found"
+        if req.book.ebook_available:
+            req.book.ebook_available = False
+        reopened += 1
+        logger.info(
+            "calibre_request_reopened_stale", request_id=req.id, book_id=req.book_id
+        )
+
+    if reopened:
+        db.commit()
+        logger.info("calibre_reopen_stale_requests_complete", reopened=reopened)
+    return reopened
+
+
 # Cap the unlinked-library scan per run so a huge library cannot stall the
 # once-a-minute reconcile job. Matched books get a link and drop out.
 BACKFILL_SCAN_LIMIT = 400

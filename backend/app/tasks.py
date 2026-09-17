@@ -552,11 +552,18 @@ async def reconcile_calibre_library():
                 healed = calibre_link_service.heal_stale_links(db, library_path)
                 calibre_link_service.backfill_fuzzy_links(db, library_path)
                 calibre_link_service.sync_availability_flags(db, library_path)
-                if healed:
-                    # A healed link may have reset a Book's ebook_available flag
-                    # or reopened a request as not_found - drop the cached
-                    # request-status views so book pages stop showing it as
-                    # available right away instead of waiting on the TTL.
+                # Catches requests left stuck on "available" from before a link
+                # went stale, or that never had a link at all - heal_stale_links
+                # only fires at the moment a link breaks, so this is what covers
+                # everything already orphaned.
+                reopened = calibre_link_service.reopen_stale_available_requests(
+                    db, library_path
+                )
+                if healed or reopened:
+                    # A healed link or reopened request may have reset a Book's
+                    # ebook_available flag - drop the cached request-status views
+                    # so book pages stop showing it as available right away
+                    # instead of waiting on the TTL.
                     from app.cache import clear_cache_pattern
                     await clear_cache_pattern("requests_by_hardcover:*")
                     await clear_cache_pattern("requests_by_hardcover_batch:*")

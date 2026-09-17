@@ -60,6 +60,22 @@ def _book(db, **kw):
     return b
 
 
+_user_seq = iter(range(1, 1000))
+
+
+def _request(db, book, *, format="ebook", status="available"):
+    n = next(_user_seq)
+    user = User(email=f"u{n}@example.com", username=f"u{n}")
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    req = BookRequest(book_id=book.id, user_id=user.id, format=format, status=status)
+    db.add(req)
+    db.commit()
+    db.refresh(req)
+    return req
+
+
 def test_upsert_creates_and_strength_ordering(db):
     b1 = _book(db, title="Dune", author="Frank Herbert")
     b2 = _book(db, title="Dune (other)", author="Frank Herbert")
@@ -117,18 +133,39 @@ def test_heal_removes_stale_link(db, library):
 
 def test_heal_reopens_available_request_as_not_found(db, library):
     b = _book(db, title="Gone", author="X", ebook_available=True)
-    user = User(email="u@example.com", username="u")
-    db.add(user)
-    db.commit()
-    db.refresh(user)
-    req = BookRequest(book_id=b.id, user_id=user.id, format="ebook", status="available")
-    db.add(req)
+    req = _request(db, b)
     cls.upsert_link(
         db, calibre_book_id=555, book_id=b.id, source="download", confirmed=True, calibre_title="Gone"
     )
     cls.heal_stale_links(db, library)
     db.refresh(req)
     assert req.status == "not_found"
+
+
+def test_reopen_stale_available_requests_with_no_link(db, library):
+    """A request stuck on 'available' with no calibre_book_links row at all -
+    e.g. left over from before heal_stale_links reset requests, or from a path
+    that set the flags without ever creating a link - must still be caught."""
+    b = _book(db, title="Gone", author="X", ebook_available=True)
+    req = _request(db, b)
+    assert db.query(CalibreBookLink).count() == 0
+
+    reopened = cls.reopen_stale_available_requests(db, library)
+    assert reopened == 1
+    db.refresh(req)
+    db.refresh(b)
+    assert req.status == "not_found"
+    assert b.ebook_available is False
+
+
+def test_reopen_stale_available_requests_leaves_present_books_alone(db, library):
+    b = _book(db, title="Dune", author="Frank Herbert", isbn="9780441013593", ebook_available=True)
+    req = _request(db, b)
+
+    reopened = cls.reopen_stale_available_requests(db, library)
+    assert reopened == 0
+    db.refresh(req)
+    assert req.status == "available"
 
 
 def test_heal_repoints_by_isbn(db, library):
