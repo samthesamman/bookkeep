@@ -698,7 +698,7 @@ async def _enrich_calibre_metadata(db: Session, *, limit: int) -> int:
     for link in rows:
         book = link.book
         try:
-            ok = await book_metadata.enrich_book(db, book)
+            ok = await book_metadata.enrich_book(db, book, calibre_book_id=link.calibre_book_id)
         except Exception as exc:
             logger.warning("calibre_book_enrich_failed", book_id=book.id, error=str(exc))
             db.rollback()
@@ -801,7 +801,9 @@ async def _import_unlinked_calibre_books(
             book.ebook_available = True
 
         try:
-            found = await book_metadata.enrich_book(db, book, resolve_hardcover=True)
+            found = await book_metadata.enrich_book(
+                db, book, resolve_hardcover=True, calibre_book_id=cal_id
+            )
         except Exception as exc:
             logger.warning("calibre_metadata_enrich_failed", calibre_id=cal_id, error=str(exc))
             db.rollback()

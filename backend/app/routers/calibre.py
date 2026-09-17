@@ -2,7 +2,7 @@
 from typing import Any, Optional
 
 import structlog
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -208,51 +208,6 @@ async def test_agent(
     client = CalibreAgentClient(base_url=data.agent_url.strip(), api_key=data.agent_api_key.strip())
     success, error = await client.health_check()
     return CalibreAgentTestResponse(success=success, error=error)
-
-
-def _calibre_agent_sync_job(db: Session, calibre_book_id: int, book: models.Book):
-    """Build a closure that pushes ``book``'s metadata/cover to calibre-cli, if configured.
-
-    Reads settings and book fields now, while the DB session is open, and
-    returns a plain async callable with no DB/ORM references attached — safe
-    to hand to ``BackgroundTasks`` regardless of when the request's session is
-    torn down. Returns ``None`` when the agent isn't configured/enabled.
-    """
-    settings = db.query(models.CalibreSettings).first()
-    client = CalibreAgentClient.from_settings(settings)
-    if client is None:
-        return None
-
-    fields: dict[str, Any] = {}
-    if book.title:
-        fields["title"] = book.title
-    if book.author:
-        fields["authors"] = book.author
-    if book.description:
-        fields["comments"] = book.description
-    if book.isbn:
-        fields["identifiers"] = {"isbn": book.isbn}
-    if book.series:
-        fields["series"] = book.series
-    if book.series_position:
-        fields["series_index"] = book.series_position
-    if book.rating:
-        fields["rating"] = book.rating
-    genres = _as_genre_list(book.genres)
-    if genres:
-        fields["tags"] = genres
-
-    cover_url = book.cover_url
-    convert_format = (settings.agent_convert_format or "").strip() or None
-
-    async def _job() -> None:
-        await client.push_metadata(calibre_book_id, fields)
-        if cover_url:
-            await client.push_cover(calibre_book_id, cover_url)
-        if convert_format:
-            await client.trigger_convert(calibre_book_id, convert_format)
-
-    return _job
 
 
 # ---------------------------------------------------------------------------
@@ -483,7 +438,6 @@ async def _resolve_book_for_link(
 async def set_book_link(
     book_id: int,
     data: LinkRequest,
-    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     _: models.User = Depends(require_admin),
 ):
@@ -519,7 +473,9 @@ async def set_book_link(
     from app.services.book_metadata import enrich_book
 
     try:
-        await enrich_book(db, book, overwrite=True, resolve_hardcover=True, use_google=True)
+        await enrich_book(
+            db, book, overwrite=True, resolve_hardcover=True, use_google=True, calibre_book_id=book_id
+        )
         if book.last_refreshed is None:
             from datetime import datetime, timezone
 
@@ -529,10 +485,6 @@ async def set_book_link(
     except Exception as exc:  # linking still succeeded
         db.rollback()
         logger.warning("calibre_manual_link_enrich_failed", book_id=book.id, error=str(exc))
-
-    job = _calibre_agent_sync_job(db, book_id, book)
-    if job:
-        background_tasks.add_task(job)
 
     return LinkResponse(
         linked_book_id=book.id,
@@ -608,7 +560,6 @@ async def clear_book_link(
 @router.post("/books/{book_id}/refresh-metadata", response_model=LinkResponse)
 async def refresh_book_metadata(
     book_id: int,
-    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     _: models.User = Depends(require_admin),
 ):
@@ -622,17 +573,15 @@ async def refresh_book_metadata(
 
     book = link.book
     try:
-        await enrich_book(db, book, overwrite=True, resolve_hardcover=True, use_google=True)
+        await enrich_book(
+            db, book, overwrite=True, resolve_hardcover=True, use_google=True, calibre_book_id=book_id
+        )
         book.last_refreshed = datetime.now(timezone.utc)
         book.metadata_locked = True
         db.commit()
     except Exception as exc:
         db.rollback()
         raise HTTPException(status_code=502, detail=f"Metadata refresh failed: {exc}")
-
-    job = _calibre_agent_sync_job(db, book_id, book)
-    if job:
-        background_tasks.add_task(job)
 
     return LinkResponse(
         linked_book_id=book.id,
@@ -821,7 +770,6 @@ async def metadata_candidates(
 async def apply_metadata(
     book_id: int,
     body: ApplyMetadataRequest,
-    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     _: models.User = Depends(require_admin),
 ):
@@ -849,7 +797,9 @@ async def apply_metadata(
     # title too (the auto-enrich path never renames — only this endpoint does).
     fields = body.fields if body.fields is not None else list(book_metadata.APPLYABLE_FIELDS)
     orig_isbn = book.isbn
-    book_metadata.apply_source(book, body.source, data, fields=fields, overwrite=True)
+    await book_metadata.apply_source(
+        db, book, body.source, data, fields=fields, overwrite=True, calibre_book_id=book_id
+    )
 
     # `Book.isbn` is unique — back out a newly-adopted ISBN that another row has.
     if book.isbn and book.isbn != orig_isbn:
@@ -888,10 +838,6 @@ async def apply_metadata(
     db.commit()
     db.refresh(book)
     logger.info("calibre_metadata_applied", book_id=book_id, source=body.source, fields=body.fields)
-
-    job = _calibre_agent_sync_job(db, book_id, book)
-    if job:
-        background_tasks.add_task(job)
 
     return ApplyMetadataResponse(
         linked_book_id=book.id,

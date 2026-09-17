@@ -38,6 +38,66 @@ from app.services.text_match import titles_match
 
 logger = structlog.get_logger()
 
+
+def _as_genre_list(value) -> list[str]:
+    if isinstance(value, list):
+        return [str(v).strip() for v in value if str(v).strip()]
+    if isinstance(value, str):
+        return [g.strip() for g in value.split(",") if g.strip()]
+    return []
+
+
+async def sync_to_calibre_agent(db, book, calibre_book_id: Optional[int] = None) -> None:
+    """Push ``book``'s current metadata/cover to calibre-cli, if configured.
+
+    Called from every metadata-writing path in this module (``enrich_book``,
+    ``apply_source``) so nothing has to remember to wire this up per call
+    site — background jobs (downloads, scheduled sweeps, the Calibre library
+    scan) get it exactly the same as the admin-triggered endpoints. A no-op
+    when the book isn't Calibre-linked or the agent isn't enabled; failures
+    are logged and swallowed inside ``CalibreAgentClient`` itself.
+    """
+    from app.models import CalibreSettings
+    from app.services import calibre_link_service
+    from app.services.calibre_agent_service import CalibreAgentClient
+
+    if calibre_book_id is None:
+        link = calibre_link_service.get_link_for_book(db, book.id)
+        if link is None:
+            return
+        calibre_book_id = link.calibre_book_id
+
+    settings = db.query(CalibreSettings).first()
+    client = CalibreAgentClient.from_settings(settings)
+    if client is None:
+        return
+
+    fields: dict = {}
+    if book.title:
+        fields["title"] = book.title
+    if book.author:
+        fields["authors"] = book.author
+    if book.description:
+        fields["comments"] = book.description
+    if book.isbn:
+        fields["identifiers"] = {"isbn": book.isbn}
+    if book.series:
+        fields["series"] = book.series
+    if book.series_position:
+        fields["series_index"] = book.series_position
+    if book.rating:
+        fields["rating"] = book.rating
+    genres = _as_genre_list(book.genres)
+    if genres:
+        fields["tags"] = genres
+
+    await client.push_metadata(calibre_book_id, fields)
+    if book.cover_url:
+        await client.push_cover(calibre_book_id, book.cover_url)
+    convert_format = (settings.agent_convert_format or "").strip() or None
+    if convert_format:
+        await client.trigger_convert(calibre_book_id, convert_format)
+
 # Per-field source priority. Keys are the source dict keys used below.
 _FIELD_PRIORITY = {
     "description": ("gb", "hc", "ol", "ab"),
@@ -149,8 +209,15 @@ async def enrich_book(
     overwrite: bool = False,
     resolve_hardcover: bool = False,
     use_google: bool = False,
+    calibre_book_id: Optional[int] = None,
 ) -> bool:
-    """Enrich ``book`` from the configured sources. Returns True if anything changed."""
+    """Enrich ``book`` from the configured sources. Returns True if anything changed.
+
+    ``calibre_book_id`` lets a caller that already knows the Calibre id push
+    to the agent even when ``book``'s ``CalibreBookLink`` row hasn't been
+    committed yet (e.g. link-then-enrich flows) — otherwise it's looked up
+    from the DB, which only works once the link exists.
+    """
     from app.models import Book
 
     isbn = getattr(book, "isbn", None)
@@ -213,6 +280,8 @@ async def enrich_book(
 
     changed = _backfill_isbn(db, book, sources) or changed
     changed = _merge(book, sources, overwrite=overwrite) or changed
+    if changed:
+        await sync_to_calibre_agent(db, book, calibre_book_id=calibre_book_id)
     return changed
 
 
@@ -291,14 +360,23 @@ async def fetch_source(
     return None
 
 
-def apply_source(
-    book, source: str, data: dict, *, fields=None, overwrite: bool = True
+async def apply_source(
+    db,
+    book,
+    source: str,
+    data: dict,
+    *,
+    fields=None,
+    overwrite: bool = True,
+    calibre_book_id: Optional[int] = None,
 ) -> bool:
     """Write one source's values onto ``book``. Returns True if anything changed.
 
     ``fields`` optionally restricts which fields are copied; ``None`` copies all
     of :data:`APPLYABLE_FIELDS` the source provides. Picking ``"hardcover"`` also
-    adopts its ``hardcover_id`` / slug when the row has none.
+    adopts its ``hardcover_id`` / slug when the row has none. ``calibre_book_id``
+    — see ``enrich_book``'s docstring; needed here too since the caller may not
+    have committed the ``CalibreBookLink`` yet when linking for the first time.
     """
     key = _SOURCE_KEY.get(source)
     if not key or not data:
@@ -329,4 +407,6 @@ def apply_source(
         book.hardcover_slug = data.get("hardcover_slug") or book.hardcover_slug
         changed = True
 
+    if changed:
+        await sync_to_calibre_agent(db, book, calibre_book_id=calibre_book_id)
     return changed

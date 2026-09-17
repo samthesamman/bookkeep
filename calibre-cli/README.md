@@ -71,16 +71,18 @@ already gives you — unrelated to and unaffected by the agent.
    enter `http://<host>:8100` as the agent URL and the same `AGENT_API_KEY`,
    enable it, and hit *Test Connection*.
 
-## Known rough edge: cover push
+## Cover push
 
 Covers are pushed via `calibredb set_metadata <id> metadata.opf`, with a
-`cover.jpg` written alongside a minimal OPF referencing it — Calibre's own
-on-disk convention for a book's metadata. This works reliably for **local**
-libraries; it hasn't been independently verified against a **remote**
-Content Server connection (which is what the agent uses, even over
-loopback) in every Calibre version. Test it (`POST /books/<id>/cover` with
-an image body) before relying on it — if it doesn't take, per-field
-metadata pushes still work fine either way.
+`cover.jpg` written alongside an OPF referencing it — Calibre's own on-disk
+convention for a book's metadata. The OPF is **not** a fresh/minimal one:
+the agent first fetches the book's current metadata (`calibredb
+show_metadata --as-opf`) and patches only the cover reference into it. An
+earlier version built a near-empty OPF just for the cover, which silently
+blanked title/authors — calibre's OPF importer treats those as mandatory
+and defaults them when absent, unlike optional fields like comments/tags
+which it correctly leaves alone. Round-tripping the real current OPF avoids
+that class of bug entirely.
 
 ## Endpoints (agent API, port 8100)
 

@@ -20,6 +20,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import xml.etree.ElementTree as ET
 from typing import Any, Dict, List, Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
@@ -40,14 +41,35 @@ CALIBREDB_BIN = os.environ.get("CALIBREDB_BIN", "calibredb")
 if not AGENT_API_KEY:
     sys.exit("AGENT_API_KEY must be set — refusing to start with no shared secret configured.")
 
-COVER_OPF_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
-<package xmlns="http://www.idpf.org/2007/opf" version="2.0">
-  <metadata/>
-  <guide>
-    <reference type="cover" href="cover.jpg" title="Cover"/>
-  </guide>
-</package>
-"""
+OPF_NS = "http://www.idpf.org/2007/opf"
+ET.register_namespace("", OPF_NS)
+ET.register_namespace("dc", "http://purl.org/dc/elements/1.1/")
+ET.register_namespace("opf", OPF_NS)
+
+
+def _inject_cover_guide(opf_xml: str) -> bytes:
+    """Add/replace a cover reference in an existing OPF, leaving every other
+    field exactly as calibre reported it.
+
+    Building a fresh near-empty OPF for just the cover (the previous
+    approach) is dangerous: calibre's OPF importer treats title/authors as
+    mandatory and defaults them when absent, silently blanking out whatever
+    the prior /metadata call had just set. Round-tripping the book's own
+    current OPF avoids that entirely.
+    """
+    root = ET.fromstring(opf_xml)
+    guide = root.find(f"{{{OPF_NS}}}guide")
+    if guide is None:
+        guide = ET.SubElement(root, f"{{{OPF_NS}}}guide")
+    for ref in list(guide.findall(f"{{{OPF_NS}}}reference")):
+        if ref.get("type") == "cover":
+            guide.remove(ref)
+    ref = ET.SubElement(guide, f"{{{OPF_NS}}}reference")
+    ref.set("type", "cover")
+    ref.set("href", "cover.jpg")
+    ref.set("title", "Cover")
+    return ET.tostring(root, xml_declaration=True, encoding="UTF-8")
+
 
 app = FastAPI(title="calibre-cli")
 
@@ -150,13 +172,21 @@ async def push_cover(calibre_id: int, request: Request) -> dict:
     image_bytes = await request.body()
     if not image_bytes:
         raise HTTPException(status_code=400, detail="Empty request body")
+
+    show_result = _run_calibredb(["show_metadata", str(calibre_id), "--as-opf"])
+    _raise_for_failure(show_result, "show_metadata")
+    try:
+        opf_bytes = _inject_cover_guide(show_result.stdout)
+    except ET.ParseError as exc:
+        raise HTTPException(status_code=502, detail=f"Could not parse current OPF metadata: {exc}")
+
     with tempfile.TemporaryDirectory() as tmp:
         cover_path = os.path.join(tmp, "cover.jpg")
         opf_path = os.path.join(tmp, "metadata.opf")
         with open(cover_path, "wb") as f:
             f.write(image_bytes)
-        with open(opf_path, "w") as f:
-            f.write(COVER_OPF_TEMPLATE)
+        with open(opf_path, "wb") as f:
+            f.write(opf_bytes)
         result = _run_calibredb(["set_metadata", str(calibre_id), opf_path])
     _raise_for_failure(result, "cover set_metadata")
     return {"success": True}
