@@ -305,10 +305,12 @@ def heal_stale_links(db: Session, library_path: str) -> int:
     """Drop or re-point links whose ``calibre_book_id`` no longer resolves.
 
     Calibre reassigns ids on delete + re-add. When the stored id is gone we try
-    to find the book again by its snapshotted ISBN/title; failing that the link
-    is removed so the fuzzy pass can rebuild it.
+    to find the book again by its snapshotted ISBN/title; failing that the book
+    was actually removed from Calibre, so the link is dropped and the Book's
+    ``ebook_available`` flag is cleared (it otherwise never resets to False) so
+    it stops showing as owned.
     """
-    links = db.query(CalibreBookLink).all()
+    links = db.query(CalibreBookLink).options(joinedload(CalibreBookLink.book)).all()
     if not links:
         return 0
 
@@ -340,6 +342,8 @@ def heal_stale_links(db: Session, library_path: str) -> int:
                 "calibre_link_repointed", book_id=link.book_id, calibre_book_id=new_id
             )
         else:
+            if link.book is not None and link.book.ebook_available:
+                link.book.ebook_available = False
             db.delete(link)
             healed += 1
             logger.info("calibre_link_removed_stale", book_id=link.book_id)

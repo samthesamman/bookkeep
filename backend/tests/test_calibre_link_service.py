@@ -104,13 +104,15 @@ def test_backfill_skips_already_linked_books(db, library):
 
 
 def test_heal_removes_stale_link(db, library):
-    b = _book(db, title="Gone", author="X")
+    b = _book(db, title="Gone", author="X", ebook_available=True)
     cls.upsert_link(
         db, calibre_book_id=555, book_id=b.id, source="fuzzy", calibre_title="Gone"
     )
     healed = cls.heal_stale_links(db, library)
     assert healed == 1
     assert db.query(CalibreBookLink).count() == 0
+    db.refresh(b)
+    assert b.ebook_available is False
 
 
 def test_heal_repoints_by_isbn(db, library):
