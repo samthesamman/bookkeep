@@ -91,7 +91,13 @@ async def sync_to_calibre_agent(db, book, calibre_book_id: Optional[int] = None)
     if genres:
         fields["tags"] = genres
 
-    await client.push_metadata(calibre_book_id, fields)
+    metadata_ok = await client.push_metadata(calibre_book_id, fields)
+    if not metadata_ok:
+        # A failed metadata push can leave the book's folder mid-rename —
+        # cover/embed calls would just compound that into a second, more
+        # confusing failure. Skip them; the next successful metadata push
+        # covers the cover/embed step too.
+        return
     if book.cover_url:
         await client.push_cover(calibre_book_id, book.cover_url)
     convert_format = (settings.agent_convert_format or "").strip() or None

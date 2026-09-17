@@ -15,6 +15,7 @@ See README.md for configuration and deployment notes.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import subprocess
@@ -91,7 +92,9 @@ def _with_library_arg() -> str:
     return CALIBRE_SERVER_URL
 
 
-def _run_calibredb(args: List[str], timeout: int = CALIBREDB_TIMEOUT_SECONDS) -> subprocess.CompletedProcess:
+def _run_calibredb(
+    args: List[str], timeout: int = CALIBREDB_TIMEOUT_SECONDS, cwd: Optional[str] = None
+) -> subprocess.CompletedProcess:
     cmd = [CALIBREDB_BIN, *args, f"--with-library={_with_library_arg()}"]
     if CALIBRE_SERVER_USERNAME:
         cmd.append(f"--username={CALIBRE_SERVER_USERNAME}")
@@ -99,11 +102,43 @@ def _run_calibredb(args: List[str], timeout: int = CALIBREDB_TIMEOUT_SECONDS) ->
         cmd.append(f"--password={CALIBRE_SERVER_PASSWORD}")
     logger.info("running calibredb %s", " ".join(args))
     try:
-        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, cwd=cwd)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=500, detail=f"calibredb not found on this host: {exc}")
     except subprocess.TimeoutExpired:
         raise HTTPException(status_code=504, detail="calibredb timed out")
+
+
+async def _run_calibredb_with_retry(
+    args: List[str],
+    timeout: int = CALIBREDB_TIMEOUT_SECONDS,
+    cwd: Optional[str] = None,
+    attempts: int = 3,
+    backoff_seconds: float = 2.0,
+) -> subprocess.CompletedProcess:
+    """Retry a calibredb write a few times before giving up.
+
+    Covers a transient race on writes that change title/author: Calibre
+    renames the book's on-disk folder to match, and a write landing right as
+    that rename is still settling can fail (seen as "Directory not empty" /
+    "No such file or directory"). The same write reliably succeeds seconds
+    later, so retry with backoff instead of failing outright.
+    """
+    result = _run_calibredb(args, timeout=timeout, cwd=cwd)
+    attempt = 1
+    while result.returncode != 0 and attempt < attempts:
+        delay = backoff_seconds * attempt
+        logger.warning(
+            "calibredb call failed (attempt %d/%d), retrying in %.0fs: %s",
+            attempt,
+            attempts,
+            delay,
+            (result.stderr or result.stdout or "")[-300:],
+        )
+        await asyncio.sleep(delay)
+        result = _run_calibredb(args, timeout=timeout, cwd=cwd)
+        attempt += 1
+    return result
 
 
 def _raise_for_failure(result: subprocess.CompletedProcess, action: str) -> None:
@@ -162,7 +197,7 @@ async def push_metadata(calibre_id: int, body: MetadataRequest) -> dict:
     args = _field_args(body.fields)
     if not args:
         return {"success": True, "skipped": True}
-    result = _run_calibredb(["set_metadata", str(calibre_id), *args])
+    result = await _run_calibredb_with_retry(["set_metadata", str(calibre_id), *args])
     _raise_for_failure(result, "set_metadata")
     return {"success": True}
 
@@ -187,7 +222,10 @@ async def push_cover(calibre_id: int, request: Request) -> dict:
             f.write(image_bytes)
         with open(opf_path, "wb") as f:
             f.write(opf_bytes)
-        result = _run_calibredb(["set_metadata", str(calibre_id), opf_path])
+        # calibredb resolves the OPF's relative cover.jpg href against its own
+        # CWD, not the OPF's directory — without this it looks for cover.jpg
+        # wherever the agent process happens to be running from.
+        result = await _run_calibredb_with_retry(["set_metadata", str(calibre_id), opf_path], cwd=tmp)
     _raise_for_failure(result, "cover set_metadata")
     return {"success": True}
 

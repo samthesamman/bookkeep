@@ -47,9 +47,13 @@ class CalibreAgentClient:
         except Exception as exc:
             return False, str(exc)
 
-    async def push_metadata(self, calibre_id: int, fields: Dict[str, Any]) -> None:
+    async def push_metadata(self, calibre_id: int, fields: Dict[str, Any]) -> bool:
+        """Returns True on success. Callers use this to decide whether it's worth
+        following up with a cover/embed push — those would just compound a
+        confusing second failure on top of a book left in a broken state by
+        this one failing (e.g. mid-way through a Calibre folder rename)."""
         if not fields:
-            return
+            return True
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 response = await client.post(
@@ -57,15 +61,18 @@ class CalibreAgentClient:
                     headers=self.headers,
                     json={"fields": fields},
                 )
-            if response.status_code != 200:
-                logger.warning(
-                    "calibre_agent_metadata_push_failed",
-                    calibre_id=calibre_id,
-                    status_code=response.status_code,
-                    response=response.text[:300],
-                )
+            if response.status_code == 200:
+                return True
+            logger.warning(
+                "calibre_agent_metadata_push_failed",
+                calibre_id=calibre_id,
+                status_code=response.status_code,
+                response=response.text[:300],
+            )
+            return False
         except Exception as exc:
             logger.warning("calibre_agent_metadata_push_error", calibre_id=calibre_id, error=str(exc))
+            return False
 
     async def push_cover(self, calibre_id: int, cover_url: str) -> None:
         try:
