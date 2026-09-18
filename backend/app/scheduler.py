@@ -68,11 +68,21 @@ JOB_DEFINITIONS = {
         "description": "Mark ebook requests available once they appear in the Calibre library",
         "type": "PROCESS",
     },
+    "import_calibre_books": {
+        "default_interval": 24 * 60 * 60,  # 24 hours
+        "description": "Heal Calibre links and import side-loaded books not yet in Bookworms",
+        "type": "PROCESS",
+        "run_on_startup": True,
+        "startup_delay_seconds": 30,
+    },
     "sync_calibre_metadata": {
         "default_interval": 24 * 60 * 60,  # 24 hours
         "description": "Batch-fetch missing metadata for Calibre library books",
         "type": "PROCESS",
         "run_on_startup": True,
+        # A little after import_calibre_books, so books it links today are
+        # usually enriched the same day instead of waiting for tomorrow's run.
+        "startup_delay_seconds": 90,
     },
 }
 
@@ -149,13 +159,23 @@ def update_job_in_db(job_name: str):
 
 
 def add_job(job_name: str, func: Callable, interval_seconds: int):
-    """Add or replace a job with the given interval"""
+    """Add or replace a job with the given interval.
+
+    ``interval_seconds <= 0`` means "manual only": the job is left out of the
+    scheduler entirely (nothing to auto-fire), but the admin Jobs page's "Run
+    Now" doesn't go through the scheduler at all - it calls the job function
+    directly - so manual runs keep working either way.
+    """
     sched = get_scheduler()
-    
+
     # Remove existing job if it exists
     if sched.get_job(job_name):
         sched.remove_job(job_name)
-    
+
+    if interval_seconds <= 0:
+        logger.info("job_manual_only", job_name=job_name)
+        return
+
     # Add the job with interval trigger
     trigger = IntervalTrigger(seconds=interval_seconds)
     sched.add_job(
@@ -165,9 +185,9 @@ def add_job(job_name: str, func: Callable, interval_seconds: int):
         name=job_name,
         replace_existing=True,
     )
-    
+
     logger.info("job_added", job_name=job_name, interval_seconds=interval_seconds)
-    
+
     # Update next_execution in database
     update_next_execution_in_db(job_name)
 
@@ -197,44 +217,57 @@ def update_next_execution_in_db(job_name: str):
 
 
 def reschedule_job(job_name: str, interval_seconds: int):
-    """Reschedule an existing job with a new interval"""
+    """Reschedule a job with a new interval, including into/out of "manual only"
+    (``interval_seconds <= 0``, meaning: not auto-scheduled, only run via the
+    admin Jobs page's "Run Now")."""
     from app.database import SessionLocal
     from app.models import JobSchedule
-    
+
     sched = get_scheduler()
     job = sched.get_job(job_name)
-    
-    if job:
+    next_run = None
+
+    if interval_seconds <= 0:
+        if job:
+            sched.remove_job(job_name)
+        logger.info("job_rescheduled_manual_only", job_name=job_name)
+    else:
         trigger = IntervalTrigger(seconds=interval_seconds)
-        sched.reschedule_job(job_name, trigger=trigger)
-        
-        # Get the new next_run_time from scheduler
+        if job:
+            sched.reschedule_job(job_name, trigger=trigger)
+        else:
+            # Was manual-only (so not in the scheduler at all) - add it back.
+            func = _job_functions().get(job_name)
+            if func:
+                sched.add_job(
+                    func, trigger=trigger, id=job_name, name=job_name, replace_existing=True
+                )
+            else:
+                logger.warning("job_function_not_found_for_reschedule", job_name=job_name)
+
         updated_job = sched.get_job(job_name)
-        next_run = None
         if updated_job and updated_job.next_run_time:
             next_run = updated_job.next_run_time.replace(tzinfo=None)
-        
-        logger.info("job_rescheduled", 
-                   job_name=job_name, 
+
+        logger.info("job_rescheduled",
+                   job_name=job_name,
                    interval_seconds=interval_seconds,
                    next_run_time=next_run.isoformat() if next_run else None)
-        
-        # Update database directly
-        db = SessionLocal()
-        try:
-            schedule = db.query(JobSchedule).filter(JobSchedule.job_name == job_name).first()
-            if schedule:
-                schedule.interval_seconds = interval_seconds
-                schedule.next_execution = next_run
-                db.commit()
-                logger.info("job_db_updated", job_name=job_name, next_execution=next_run)
-        except Exception as e:
-            logger.error("job_db_update_failed", job_name=job_name, error=str(e))
-            db.rollback()
-        finally:
-            db.close()
-    else:
-        logger.warning("job_not_found_for_reschedule", job_name=job_name)
+
+    # Update database directly
+    db = SessionLocal()
+    try:
+        schedule = db.query(JobSchedule).filter(JobSchedule.job_name == job_name).first()
+        if schedule:
+            schedule.interval_seconds = interval_seconds
+            schedule.next_execution = next_run
+            db.commit()
+            logger.info("job_db_updated", job_name=job_name, next_execution=next_run)
+    except Exception as e:
+        logger.error("job_db_update_failed", job_name=job_name, error=str(e))
+        db.rollback()
+    finally:
+        db.close()
 
 
 def get_job_info(job_name: str) -> Optional[Dict[str, Any]]:
@@ -308,10 +341,8 @@ def resume_job(job_name: str):
     logger.info("job_resumed", job_name=job_name)
 
 
-async def initialize_jobs():
-    """Initialize all jobs from database or defaults"""
-    from app.database import SessionLocal
-    from app.models import JobSchedule
+def _job_functions() -> Dict[str, Callable]:
+    """Map job names to their async functions (lazy import to avoid a cycle)."""
     from app.tasks import (
         refresh_seed_data,
         check_processing_requests,
@@ -322,12 +353,12 @@ async def initialize_jobs():
         sync_hardcover_lists,
         send_availability_emails,
         reconcile_calibre_library,
+        import_calibre_books,
         sync_calibre_metadata,
         refresh_nyt_bestsellers,
     )
 
-    # Map job names to their async functions
-    job_functions = {
+    return {
         "refresh_seed_data": refresh_seed_data,
         "check_processing_requests": check_processing_requests,
         "sync_from_booklore": sync_from_booklore,
@@ -337,10 +368,19 @@ async def initialize_jobs():
         "sync_hardcover_lists": sync_hardcover_lists,
         "send_availability_emails": send_availability_emails,
         "reconcile_calibre_library": reconcile_calibre_library,
+        "import_calibre_books": import_calibre_books,
         "sync_calibre_metadata": sync_calibre_metadata,
         "refresh_nyt_bestsellers": refresh_nyt_bestsellers,
     }
-    
+
+
+async def initialize_jobs():
+    """Initialize all jobs from database or defaults"""
+    from app.database import SessionLocal
+    from app.models import JobSchedule
+
+    job_functions = _job_functions()
+
     db = SessionLocal()
     try:
         for job_name, definition in JOB_DEFINITIONS.items():
@@ -363,12 +403,16 @@ async def initialize_jobs():
             func = job_functions.get(job_name)
             if func:
                 add_job(job_name, func, interval)
-                if definition.get("run_on_startup"):
+                # Manual-only jobs (interval <= 0) aren't in the scheduler at
+                # all - nothing to nudge, and "manual only" means startup
+                # shouldn't auto-run it either.
+                if definition.get("run_on_startup") and interval > 0:
                     # Fire once shortly after boot, then fall back to the interval.
+                    delay = definition.get("startup_delay_seconds", 30)
                     try:
                         get_scheduler().modify_job(
                             job_name,
-                            next_run_time=datetime.now() + timedelta(seconds=30),
+                            next_run_time=datetime.now() + timedelta(seconds=delay),
                         )
                         update_next_execution_in_db(job_name)
                     except Exception as e:

@@ -28,6 +28,7 @@ DEFAULT_JOBS = {
     "sync_hardcover_lists": {"interval_seconds": 6 * 60 * 60, "type": "PROCESS"},
     "send_availability_emails": {"interval_seconds": 5 * 60, "type": "PROCESS"},
     "reconcile_calibre_library": {"interval_seconds": 24 * 60 * 60, "type": "PROCESS"},
+    "import_calibre_books": {"interval_seconds": 24 * 60 * 60, "type": "PROCESS"},
     "sync_calibre_metadata": {"interval_seconds": 24 * 60 * 60, "type": "PROCESS"},
 }
 
@@ -44,6 +45,7 @@ INTERVAL_OPTIONS = [
     {"value": 24 * 60 * 60, "label": "Every 24 hours"},
     {"value": 48 * 60 * 60, "label": "Every 2 days"},
     {"value": 7 * 24 * 60 * 60, "label": "Every 7 days"},
+    {"value": 0, "label": "Never (manual only)"},
 ]
 
 
@@ -120,17 +122,19 @@ def get_job_info(job_name: str, db: Session) -> Dict[str, Any]:
         last_execution = None
         is_enabled = True
     
-    # Get next_execution from scheduler (most accurate) or fall back to calculation
-    if scheduler_info and scheduler_info.get("next_run_time"):
+    # Get next_execution from scheduler (most accurate) or fall back to calculation.
+    # interval_seconds <= 0 means "manual only" - never auto-scheduled, so there's
+    # no next execution regardless of what's stored from before it was set that way.
+    if interval_seconds <= 0:
+        next_execution = None
+    elif scheduler_info and scheduler_info.get("next_run_time"):
         next_execution = datetime.fromisoformat(scheduler_info["next_run_time"])
     elif schedule and schedule.next_execution:
         next_execution = schedule.next_execution
     elif last_execution:
         next_execution = last_execution + timedelta(seconds=interval_seconds)
-    elif interval_seconds > 0:
-        next_execution = datetime.now()
     else:
-        next_execution = None
+        next_execution = datetime.now()
     
     return {
         "name": job_name,
@@ -251,25 +255,14 @@ async def run_job(
             detail=f"Job '{job_name}' not found"
         )
     
-    # Trigger the job via APScheduler
-    from app.scheduler import run_job_now
+    # Trigger the job via APScheduler (a no-op if the job is manual-only and
+    # therefore not registered with the scheduler at all - harmless either way,
+    # since the actual run below doesn't depend on it)
+    from app.scheduler import run_job_now, _job_functions
     run_job_now(job_name)
-    
-    # Import job functions for the background task wrapper
-    from app.tasks import refresh_seed_data, check_processing_requests, sync_from_booklore, sync_from_audiobookshelf, sync_missing_metadata, sync_hardcover_lists, send_availability_emails, reconcile_calibre_library, sync_calibre_metadata
 
-    job_functions = {
-        "refresh_seed_data": refresh_seed_data,
-        "check_processing_requests": check_processing_requests,
-        "sync_from_booklore": sync_from_booklore,
-        "sync_from_audiobookshelf": sync_from_audiobookshelf,
-        "sync_missing_metadata": sync_missing_metadata,
-        "sync_hardcover_lists": sync_hardcover_lists,
-        "send_availability_emails": send_availability_emails,
-        "reconcile_calibre_library": reconcile_calibre_library,
-        "sync_calibre_metadata": sync_calibre_metadata,
-    }
-    
+    job_functions = _job_functions()
+
     job_func = job_functions.get(job_name)
     if not job_func:
         raise HTTPException(

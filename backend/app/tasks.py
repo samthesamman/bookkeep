@@ -854,21 +854,74 @@ async def _import_unlinked_calibre_books(
     return created
 
 
-async def sync_calibre_metadata() -> None:
-    """Batch-fetch missing metadata for Calibre library books.
+async def import_calibre_books() -> None:
+    """Keep the Calibre <-> Book link table healthy and import side-loaded books.
 
     Runs on startup and once a day (and can be triggered from the admin Jobs
-    page). Metadata comes from Open Library first (no API key, no rate limit),
-    then Hardcover for series / ratings / anything still missing. Three passes,
-    each bounded per run:
+    page). Two passes, each bounded per run:
 
-    1. Link library books that match a ``Book`` row we already have.
-    2. Give a ``Book`` row + metadata to library books that have neither,
-       then link them (this is what clears "metadata from Calibre only").
-    3. Refresh linked books whose local metadata is absent or stale-incomplete.
+    1. ``heal_stale_links`` / ``backfill_fuzzy_links`` - re-point or drop links
+       whose ``calibre_book_id`` no longer resolves, and link any not-yet-linked
+       library book that already matches a ``Book`` row.
+    2. ``_import_unlinked_calibre_books`` - give a ``Book`` row + metadata to
+       library books that have neither (side-loads Bookworms has never seen);
+       this is what clears "metadata from Calibre only".
+
+    Split out from ``sync_calibre_metadata`` (which only fills gaps on books
+    already linked here) so the two can be scheduled or disabled independently
+    - discovering/linking books is comparatively cheap, while the metadata
+    backfill is the heavier, API-call-hungry pass.
     """
     from app.routers.calibre import get_active_library_path, _bool_setting, OVERLAY_ENABLED_KEY
     from app.services import calibre_link_service
+
+    db: Session = SessionLocal()
+    try:
+        library_path = get_active_library_path(db)
+        if not library_path:
+            logger.info("import_calibre_books_skipped", reason="no_calibre_library")
+            return
+        if not _bool_setting(db, OVERLAY_ENABLED_KEY, True):
+            logger.info("import_calibre_books_skipped", reason="overlay_disabled")
+            return
+
+        try:
+            calibre_link_service.heal_stale_links(db, library_path)
+            calibre_link_service.backfill_fuzzy_links(db, library_path)
+        except Exception as e:
+            logger.error("import_calibre_books_link_error", error=str(e))
+            db.rollback()
+
+        imported = 0
+        try:
+            imported = await _import_unlinked_calibre_books(
+                db, library_path, limit=CALIBRE_METADATA_SCAN_LIMIT
+            )
+        except Exception as e:
+            logger.error("import_calibre_books_import_error", error=str(e))
+            db.rollback()
+
+        logger.info("import_calibre_books_complete", imported=imported)
+    except Exception as e:
+        logger.error("import_calibre_books_error", error=str(e))
+        db.rollback()
+    finally:
+        db.close()
+
+
+async def sync_calibre_metadata() -> None:
+    """Fill in missing metadata (description, cover, genres, ...) for
+    already-linked Calibre books.
+
+    Runs on startup and once a day (and can be triggered from the admin Jobs
+    page). Metadata comes from Open Library first (no API key, no rate limit),
+    then Hardcover for series / ratings / anything still missing. Bounded per
+    run (``CALIBRE_METADATA_SCAN_LIMIT``).
+
+    Linking new/side-loaded Calibre books into a ``Book`` row in the first
+    place is a separate job (``import_calibre_books``) - see its docstring.
+    """
+    from app.routers.calibre import get_active_library_path, _bool_setting, OVERLAY_ENABLED_KEY
 
     db: Session = SessionLocal()
     try:
@@ -880,26 +933,8 @@ async def sync_calibre_metadata() -> None:
             logger.info("sync_calibre_metadata_skipped", reason="overlay_disabled")
             return
 
-        try:
-            calibre_link_service.heal_stale_links(db, library_path)
-            calibre_link_service.backfill_fuzzy_links(db, library_path)
-        except Exception as e:
-            logger.error("sync_calibre_metadata_link_error", error=str(e))
-            db.rollback()
-
-        imported = 0
-        try:
-            imported = await _import_unlinked_calibre_books(
-                db, library_path, limit=CALIBRE_METADATA_SCAN_LIMIT
-            )
-        except Exception as e:
-            logger.error("sync_calibre_metadata_import_error", error=str(e))
-            db.rollback()
-
         enriched = await _enrich_calibre_metadata(db, limit=CALIBRE_METADATA_SCAN_LIMIT)
-        logger.info(
-            "sync_calibre_metadata_complete", imported=imported, enriched=enriched
-        )
+        logger.info("sync_calibre_metadata_complete", enriched=enriched)
     except Exception as e:
         logger.error("sync_calibre_metadata_error", error=str(e))
         db.rollback()

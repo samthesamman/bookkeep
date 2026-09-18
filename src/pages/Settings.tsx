@@ -134,7 +134,7 @@ function formatTimeUntilStatic(nextExecution: string | null): string {
 }
 
 // Live countdown component that updates periodically
-function Countdown({ nextExecution }: { nextExecution: string | null }) {
+function Countdown({ nextExecution, intervalSeconds }: { nextExecution: string | null; intervalSeconds?: number }) {
   const [timeLeft, setTimeLeft] = useState(formatTimeUntilStatic(nextExecution));
 
   useEffect(() => {
@@ -149,6 +149,10 @@ function Countdown({ nextExecution }: { nextExecution: string | null }) {
 
     return () => clearInterval(interval);
   }, [nextExecution]);
+
+  if (!nextExecution && intervalSeconds !== undefined && intervalSeconds <= 0) {
+    return <span>Manual only</span>;
+  }
 
   return <span>{timeLeft}</span>;
 }
@@ -2292,7 +2296,7 @@ export default function Settings() {
                         <TableCell className="text-muted-foreground">
                           <div className="flex items-center gap-2">
                             <Clock className="h-4 w-4" />
-                            <Countdown nextExecution={job.next_execution} />
+                            <Countdown nextExecution={job.next_execution} intervalSeconds={job.interval_seconds} />
                           </div>
                         </TableCell>
                         <TableCell className="text-right">

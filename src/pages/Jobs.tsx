@@ -30,9 +30,9 @@ function formatJobName(name: string): string {
     .join(' ');
 }
 
-function formatTimeUntil(nextExecution: string | null): string {
-  if (!nextExecution) return 'Unknown';
-  
+function formatTimeUntil(nextExecution: string | null, intervalSeconds?: number): string {
+  if (!nextExecution) return intervalSeconds !== undefined && intervalSeconds <= 0 ? 'Manual only' : 'Unknown';
+
   const next = new Date(nextExecution);
   const now = new Date();
   const diffMs = next.getTime() - now.getTime();
@@ -164,7 +164,7 @@ export default function Jobs() {
                     <TableCell className="text-muted-foreground">
                       <div className="flex items-center gap-2">
                         <Clock className="h-4 w-4" />
-                        {formatTimeUntil(job.next_execution)}
+                        {formatTimeUntil(job.next_execution, job.interval_seconds)}
                       </div>
                     </TableCell>
                     <TableCell className="text-right">
