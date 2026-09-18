@@ -52,6 +52,15 @@ else:
     max_overflow = int(os.getenv("DB_MAX_OVERFLOW", "20"))
     pool_timeout = int(os.getenv("DB_POOL_TIMEOUT", "30"))
     pool_recycle = int(os.getenv("DB_POOL_RECYCLE", "1800"))
+    # Unlike the SQLite path above (busy_timeout=30000), Postgres had no bound
+    # on how long a query can sit waiting on a lock or just run long - every DB
+    # call here is synchronous and made directly on the app's single event
+    # loop, so an unbounded wait (e.g. two background jobs committing to the
+    # same row at once) doesn't just slow one request, it freezes the whole
+    # server until Postgres responds. These turn that into a clean, catchable
+    # exception instead.
+    statement_timeout_ms = int(os.getenv("DB_STATEMENT_TIMEOUT_MS", "30000"))
+    lock_timeout_ms = int(os.getenv("DB_LOCK_TIMEOUT_MS", "15000"))
 
     engine = create_engine(
         DATABASE_URL,
@@ -60,6 +69,9 @@ else:
         pool_timeout=pool_timeout,
         pool_recycle=pool_recycle,
         pool_pre_ping=True,
+        connect_args={
+            "options": f"-c statement_timeout={statement_timeout_ms} -c lock_timeout={lock_timeout_ms}"
+        },
     )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

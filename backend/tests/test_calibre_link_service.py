@@ -102,42 +102,46 @@ def test_upsert_is_one_to_one_on_book(db):
     assert len(links) == 1 and links[0].calibre_book_id == 99
 
 
-def test_backfill_fuzzy_links_matches_by_isbn_and_title(db, library):
+@pytest.mark.asyncio
+async def test_backfill_fuzzy_links_matches_by_isbn_and_title(db, library):
     _book(db, title="Dune", author="Frank Herbert", isbn="9780441013593")
     _book(db, title="The Hobbit", author="J.R.R. Tolkien")
     _book(db, title="Nonexistent Book", author="Nobody")
 
-    created = cls.backfill_fuzzy_links(db, library)
+    created = await cls.backfill_fuzzy_links(db, library)
     assert created == 2
     linked = {l.calibre_book_id for l in db.query(CalibreBookLink).all()}
     assert linked == {10, 20}
 
 
-def test_backfill_skips_already_linked_books(db, library):
+@pytest.mark.asyncio
+async def test_backfill_skips_already_linked_books(db, library):
     b = _book(db, title="Dune", author="Frank Herbert", isbn="9780441013593")
     cls.upsert_link(db, calibre_book_id=20, book_id=b.id, source="download", confirmed=True)
-    assert cls.backfill_fuzzy_links(db, library) == 0
+    assert await cls.backfill_fuzzy_links(db, library) == 0
 
 
-def test_heal_removes_stale_link(db, library):
+@pytest.mark.asyncio
+async def test_heal_removes_stale_link(db, library):
     b = _book(db, title="Gone", author="X", ebook_available=True)
     cls.upsert_link(
         db, calibre_book_id=555, book_id=b.id, source="fuzzy", calibre_title="Gone"
     )
-    healed = cls.heal_stale_links(db, library)
+    healed = await cls.heal_stale_links(db, library)
     assert healed == 1
     assert db.query(CalibreBookLink).count() == 0
     db.refresh(b)
     assert b.ebook_available is False
 
 
-def test_heal_reopens_available_request_as_not_found(db, library):
+@pytest.mark.asyncio
+async def test_heal_reopens_available_request_as_not_found(db, library):
     b = _book(db, title="Gone", author="X", ebook_available=True)
     req = _request(db, b)
     cls.upsert_link(
         db, calibre_book_id=555, book_id=b.id, source="download", confirmed=True, calibre_title="Gone"
     )
-    cls.heal_stale_links(db, library)
+    await cls.heal_stale_links(db, library)
     db.refresh(req)
     assert req.status == "not_found"
 
@@ -168,7 +172,8 @@ def test_reopen_stale_available_requests_leaves_present_books_alone(db, library)
     assert req.status == "available"
 
 
-def test_heal_repoints_by_isbn(db, library):
+@pytest.mark.asyncio
+async def test_heal_repoints_by_isbn(db, library):
     b = _book(db, title="Dune", author="Frank Herbert", isbn="9780441013593")
     cls.upsert_link(
         db,
@@ -179,7 +184,7 @@ def test_heal_repoints_by_isbn(db, library):
         calibre_isbn="9780441013593",
         calibre_title="Dune",
     )
-    cls.heal_stale_links(db, library)
+    await cls.heal_stale_links(db, library)
     assert db.query(CalibreBookLink).one().calibre_book_id == 20
 
 

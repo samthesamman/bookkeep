@@ -744,7 +744,9 @@ async def _import_unlinked_calibre_books(
     from app.models import Book, CalibreBookLink
 
     try:
-        library_ids = calibre_service.existing_book_ids(library_path)
+        library_ids = await calibre_service.call_with_timeout(
+            calibre_service.existing_book_ids, library_path
+        )
     except calibre_service.CalibreError as exc:
         logger.warning("calibre_metadata_probe_failed", error=str(exc))
         return 0
@@ -755,8 +757,12 @@ async def _import_unlinked_calibre_books(
         return 0
 
     try:
-        identities = calibre_service.book_identities(library_path, todo)
-        fmt_map = calibre_service.formats_for_ids(library_path, todo)
+        identities = await calibre_service.call_with_timeout(
+            calibre_service.book_identities, library_path, todo
+        )
+        fmt_map = await calibre_service.call_with_timeout(
+            calibre_service.formats_for_ids, library_path, todo
+        )
     except calibre_service.CalibreError as exc:
         logger.warning("calibre_metadata_identities_failed", error=str(exc))
         return 0
@@ -893,14 +899,14 @@ async def import_calibre_books() -> None:
         # instead of re-deriving it from scratch.
         t0 = time.monotonic()
         try:
-            healed = calibre_link_service.heal_stale_links(db, library_path)
+            healed = await calibre_link_service.heal_stale_links(db, library_path)
         except Exception as e:
             logger.error("import_calibre_books_link_error", phase="heal_stale_links", error=str(e))
             db.rollback()
             healed = None
         t1 = time.monotonic()
         try:
-            backfilled = calibre_link_service.backfill_fuzzy_links(db, library_path)
+            backfilled = await calibre_link_service.backfill_fuzzy_links(db, library_path)
         except Exception as e:
             logger.error("import_calibre_books_link_error", phase="backfill_fuzzy_links", error=str(e))
             db.rollback()

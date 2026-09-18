@@ -5,13 +5,51 @@ this never contends with a running Calibre instance.
 """
 from __future__ import annotations
 
+import asyncio
+import functools
 import os
 import sqlite3
-from typing import Any, Optional
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any, Callable, Optional, TypeVar
 
 import structlog
 
 logger = structlog.get_logger()
+
+_T = TypeVar("_T")
+
+# Every function in this module talks to metadata.db via the synchronous
+# sqlite3 module - fine on local disk, but on a network-mounted library (this
+# app supports CIFS/SMB/NFS mounts for the library path) the underlying read
+# can hang at the OS/filesystem I/O level. sqlite3's own busy_timeout (set in
+# _connect below) only covers SQLite-level lock contention *after* a read
+# succeeds enough to detect one - it does nothing for the read itself
+# blocking. A stuck read here, called directly from an async job, freezes the
+# app's single event loop for everyone until it returns (if ever).
+_IO_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="calibre-io")
+CALIBRE_IO_TIMEOUT_SECONDS = float(os.getenv("CALIBRE_IO_TIMEOUT_SECONDS", "20"))
+
+
+async def call_with_timeout(
+    fn: Callable[..., _T], *args: Any, timeout: Optional[float] = None, **kwargs: Any
+) -> _T:
+    """Run a blocking calibre_service call off the event loop with a hard timeout.
+
+    Degrades a stuck network-mount read to a clean ``CalibreError`` after
+    ``timeout`` seconds instead of hanging the whole app. The call still runs
+    to completion in its worker thread even after we give up waiting on it
+    (Python can't forcibly kill a thread) - harmless since these calls only
+    touch a throwaway sqlite connection, never the caller's DB session.
+    """
+    loop = asyncio.get_running_loop()
+    future = loop.run_in_executor(_IO_EXECUTOR, functools.partial(fn, *args, **kwargs))
+    try:
+        return await asyncio.wait_for(future, timeout=timeout or CALIBRE_IO_TIMEOUT_SECONDS)
+    except asyncio.TimeoutError as exc:
+        raise CalibreError(
+            f"Calibre library access timed out after {timeout or CALIBRE_IO_TIMEOUT_SECONDS:.0f}s "
+            "(slow or unresponsive network mount?)"
+        ) from exc
 
 # Calibre stores format names uppercase (EPUB, MOBI, ...). Map the common ones.
 _MEDIA_TYPES = {

@@ -301,7 +301,7 @@ def sync_availability_flags(db: Session, library_path: str) -> int:
     return changed
 
 
-def heal_stale_links(db: Session, library_path: str) -> int:
+async def heal_stale_links(db: Session, library_path: str) -> int:
     """Drop or re-point links whose ``calibre_book_id`` no longer resolves.
 
     Calibre reassigns ids on delete + re-add. When the stored id is gone we try
@@ -317,7 +317,9 @@ def heal_stale_links(db: Session, library_path: str) -> int:
         return 0
 
     try:
-        present = calibre_service.existing_book_ids(library_path)
+        present = await calibre_service.call_with_timeout(
+            calibre_service.existing_book_ids, library_path
+        )
     except calibre_service.CalibreError as exc:
         logger.warning("calibre_link_heal_probe_failed", error=str(exc))
         return 0
@@ -331,7 +333,8 @@ def heal_stale_links(db: Session, library_path: str) -> int:
     rematched: dict[int, Optional[int]] = {}
     if stale:
         try:
-            results = calibre_service.match_books(
+            results = await calibre_service.call_with_timeout(
+                calibre_service.match_books,
                 library_path,
                 [(link.calibre_title or "", None, link.calibre_isbn) for link in stale],
             )
@@ -537,14 +540,16 @@ def find_matching_book(
     return db.query(Book).filter(Book.id == best_id).first() if best_id is not None else None
 
 
-def backfill_fuzzy_links(db: Session, library_path: str) -> int:
+async def backfill_fuzzy_links(db: Session, library_path: str) -> int:
     """Match not-yet-linked library books to ``Book`` rows and persist fuzzy links.
 
     Driven from the Calibre side (the bounded set): each library book without a
     link is matched against the ``Book`` table by ISBN then fuzzy title/author.
     """
     try:
-        library_ids = calibre_service.existing_book_ids(library_path)
+        library_ids = await calibre_service.call_with_timeout(
+            calibre_service.existing_book_ids, library_path
+        )
     except calibre_service.CalibreError as exc:
         logger.warning("calibre_link_backfill_probe_failed", error=str(exc))
         return 0
@@ -555,7 +560,9 @@ def backfill_fuzzy_links(db: Session, library_path: str) -> int:
         return 0
 
     try:
-        identities = calibre_service.book_identities(library_path, todo)
+        identities = await calibre_service.call_with_timeout(
+            calibre_service.book_identities, library_path, todo
+        )
     except calibre_service.CalibreError as exc:
         logger.warning("calibre_link_backfill_lookup_failed", error=str(exc))
         return 0
