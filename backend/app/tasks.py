@@ -555,6 +555,9 @@ async def reconcile_calibre_library():
             db.rollback()
 
         try:
+            logger.info(
+                                "ck_a",
+                            )
             calibre_link_service.sync_availability_flags(db, library_path)
             # Catches requests left stuck on "available" from before a link
             # went stale, or that never had a link at all - heal_stale_links
@@ -588,6 +591,9 @@ async def reconcile_calibre_library():
 
         matches = []
         if reqs:
+            logger.info(
+                                            "ck_b",
+                                        )
             try:
                 matches = calibre_service.match_books(
                     library_path, [(r.book.title, r.book.author, r.book.isbn) for r in reqs]
@@ -597,6 +603,9 @@ async def reconcile_calibre_library():
 
         now = datetime.now(timezone.utc)
         updated = 0
+        logger.info(
+                                        "ck_c",
+                                    )
         for req, calibre_id in zip(reqs, matches):
             if calibre_id is None:
                 # Fuzzy match missed - trust a persisted link if the book still
