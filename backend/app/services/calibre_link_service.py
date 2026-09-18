@@ -322,21 +322,26 @@ def heal_stale_links(db: Session, library_path: str) -> int:
         logger.warning("calibre_link_heal_probe_failed", error=str(exc))
         return 0
 
+    stale = [link for link in links if link.calibre_book_id not in present]
+
+    # One catalog load matched in-memory against every stale link, instead of
+    # a full library re-scan per link - the loop below has no await points
+    # (it runs on the app's single event loop), so N re-scans would block all
+    # other requests for the whole run on anything but a tiny library.
+    rematched: dict[int, Optional[int]] = {}
+    if stale:
+        try:
+            results = calibre_service.match_books(
+                library_path,
+                [(link.calibre_title or "", None, link.calibre_isbn) for link in stale],
+            )
+            rematched = {link.id: new_id for link, new_id in zip(stale, results)}
+        except calibre_service.CalibreError:
+            rematched = {}
+
     healed = 0
-    for link in links:
-        if link.calibre_book_id in present:
-            continue
-        new_id = None
-        if link.calibre_isbn or link.calibre_title:
-            try:
-                new_id = calibre_service.find_book_match(
-                    library_path,
-                    link.calibre_title or "",
-                    None,
-                    link.calibre_isbn,
-                )
-            except calibre_service.CalibreError:
-                new_id = None
+    for link in stale:
+        new_id = rematched.get(link.id) if (link.calibre_isbn or link.calibre_title) else None
         if new_id and new_id in present:
             link.calibre_book_id = new_id
             healed += 1
