@@ -460,7 +460,11 @@ async def _refresh_downloaded_books(db: Session, book_ids) -> None:
     Runs the full merge (Google Books description, Hardcover ratings/series, Open
     Library fallback) with overwrite, so a downloaded book stops carrying
     whatever thin blurb it had from being browsed pre-download. Called only on
-    the state transition, so it is cheap on the APIs.
+    the state transition, so it is normally cheap on the APIs - but a batch of
+    several ``book_ids`` at once (e.g. many stuck requests resolving together)
+    hits Apple Books too, whose free tier is only ~20 req/min, so the pause
+    between books needs to hold that pace even though the other sources here
+    are much more generous.
     """
     if not book_ids:
         return
@@ -488,7 +492,7 @@ async def _refresh_downloaded_books(db: Session, book_ids) -> None:
         except Exception as exc:
             db.rollback()
             logger.warning("downloaded_book_metadata_refresh_failed", book_id=bid, error=str(exc))
-        await asyncio.sleep(0.3)
+        await asyncio.sleep(3.0)
 
 
 async def check_processing_requests():
@@ -514,13 +518,23 @@ async def check_processing_requests():
 
 
 async def reconcile_calibre_library():
-    """Every minute: treat the Calibre library as the source of truth for ebooks.
+    """Daily: treat the Calibre library as the source of truth for ebooks.
 
-    1. Promotes completed ebook downloads that Calibre has now indexed.
+    1. Promotes completed ebook downloads that Calibre has now indexed (a
+       fallback - ``check_processing_requests`` does this every 5 minutes
+       independently, so downloads don't wait on this job's cadence).
     2. Flips any not-yet-available ebook request (pending / approved / processing
-       / not_found) to 'available' once its book is in the library — however it
+       / not_found) to 'available' once its book is in the library - however it
        got there (download, manual add, side-load).
+    3. Reopens any request stuck on "available" whose book no longer resolves
+       in the library, and keeps ``ebook_available`` flags in sync.
     The whole library is loaded once and every request matched against it.
+
+    Link healing (``heal_stale_links`` / ``backfill_fuzzy_links``) and the
+    Hardcover/Open Library metadata backfill are NOT done here - both already
+    run once a day (and on startup) as part of ``sync_calibre_metadata``, with
+    a much larger, better-paced batch. Duplicating them here just doubles the
+    upstream API calls for no benefit.
     """
     from sqlalchemy.orm import joinedload
     from app.models import BookRequest
@@ -540,40 +554,25 @@ async def reconcile_calibre_library():
             logger.error("reconcile_ebook_library_imports_error", error=str(e))
             db.rollback()
 
-        # Keep the Calibre <-> Book link table healthy, then enrich any
-        # linked books not yet filled from Hardcover. The heal/backfill scan is
-        # throttled — download and request links are created inline elsewhere,
-        # so this only needs to catch side-loads periodically.
-        global _LAST_LINK_MAINTENANCE
-        now_ts = datetime.now(timezone.utc)
-        if (now_ts - _LAST_LINK_MAINTENANCE) >= LINK_MAINTENANCE_INTERVAL:
-            _LAST_LINK_MAINTENANCE = now_ts
-            try:
-                healed = calibre_link_service.heal_stale_links(db, library_path)
-                calibre_link_service.backfill_fuzzy_links(db, library_path)
-                calibre_link_service.sync_availability_flags(db, library_path)
-                # Catches requests left stuck on "available" from before a link
-                # went stale, or that never had a link at all - heal_stale_links
-                # only fires at the moment a link breaks, so this is what covers
-                # everything already orphaned.
-                reopened = calibre_link_service.reopen_stale_available_requests(
-                    db, library_path
-                )
-                if healed or reopened:
-                    # A healed link or reopened request may have reset a Book's
-                    # ebook_available flag - drop the cached request-status views
-                    # so book pages stop showing it as available right away
-                    # instead of waiting on the TTL.
-                    from app.cache import clear_cache_pattern
-                    await clear_cache_pattern("requests_by_hardcover:*")
-                    await clear_cache_pattern("requests_by_hardcover_batch:*")
-            except Exception as e:
-                logger.error("calibre_link_maintenance_error", error=str(e))
-                db.rollback()
         try:
-            await _enrich_linked_calibre_books(db)
+            calibre_link_service.sync_availability_flags(db, library_path)
+            # Catches requests left stuck on "available" from before a link
+            # went stale, or that never had a link at all - heal_stale_links
+            # only fires at the moment a link breaks, so this is what covers
+            # everything already orphaned.
+            reopened = calibre_link_service.reopen_stale_available_requests(
+                db, library_path
+            )
+            if reopened:
+                # A reopened request may have reset a Book's ebook_available
+                # flag - drop the cached request-status views so book pages
+                # stop showing it as available right away instead of waiting
+                # on the TTL.
+                from app.cache import clear_cache_pattern
+                await clear_cache_pattern("requests_by_hardcover:*")
+                await clear_cache_pattern("requests_by_hardcover_batch:*")
         except Exception as e:
-            logger.error("calibre_link_enrich_error", error=str(e))
+            logger.error("calibre_link_maintenance_error", error=str(e))
             db.rollback()
 
         reqs = (
@@ -674,30 +673,22 @@ async def reconcile_calibre_library():
         db.close()
 
 
-# Books enriched per reconcile run, to stay within Hardcover's rate limits.
-CALIBRE_ENRICH_BATCH = 10
-
-# The full library <-> Book match scan is expensive; run it at most this often.
-LINK_MAINTENANCE_INTERVAL = timedelta(minutes=10)
-_LAST_LINK_MAINTENANCE = datetime.min.replace(tzinfo=timezone.utc)
-
-
 # Cap the daily/startup Calibre metadata sweep so one run stays polite to the
 # upstream metadata APIs on a very large library. Whatever is left over is
-# picked up on the next run (and by the per-minute reconcile batch in between).
+# picked up on the next run.
 CALIBRE_METADATA_SCAN_LIMIT = 400
 
 
 async def _enrich_calibre_metadata(db: Session, *, limit: int) -> int:
     """Fill in metadata for linked Calibre books that are missing it.
 
-    Shared by the per-minute reconcile pass (small batch) and the
-    ``sync_calibre_metadata`` job (full sweep). Targets linked books with a gap
-    in the fields the overlay shows — description, cover, genres — or that have
-    never been refreshed. Metadata comes from Open Library plus Hardcover (for
-    linked books); Google Books is left for the post-download refresh so this
-    sweep does not spend its daily quota. Honors the overlay toggle. One book at
-    a time with a short pause between lookups.
+    Used by the ``sync_calibre_metadata`` job (full daily sweep). Targets
+    linked books with a gap in the fields the overlay shows — description,
+    cover, genres — or that have never been refreshed. Metadata comes from
+    Open Library plus Hardcover (for linked books); Google Books is left for
+    the post-download refresh so this sweep does not spend its daily quota.
+    Honors the overlay toggle. One book at a time with a short pause between
+    lookups.
     """
     from app.routers.calibre import _bool_setting, OVERLAY_ENABLED_KEY
     from app.services import book_metadata, calibre_link_service
@@ -733,11 +724,6 @@ async def _enrich_calibre_metadata(db: Session, *, limit: int) -> int:
     if enriched:
         logger.info("calibre_book_enrich_complete", enriched=enriched, checked=len(rows))
     return enriched
-
-
-async def _enrich_linked_calibre_books(db: Session) -> int:
-    """Per-minute slice of the Calibre metadata backfill (see sync_calibre_metadata)."""
-    return await _enrich_calibre_metadata(db, limit=CALIBRE_ENRICH_BATCH)
 
 
 async def _import_unlinked_calibre_books(

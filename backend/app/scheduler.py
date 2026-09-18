@@ -64,7 +64,7 @@ JOB_DEFINITIONS = {
         "type": "PROCESS",
     },
     "reconcile_calibre_library": {
-        "default_interval": 60,  # 1 minute
+        "default_interval": 24 * 60 * 60,  # 24 hours
         "description": "Mark ebook requests available once they appear in the Calibre library",
         "type": "PROCESS",
     },
