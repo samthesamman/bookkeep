@@ -102,30 +102,59 @@ def formats_for_ids(library_path: str, ids: list[int]) -> dict[int, list[str]]:
 def book_identities(
     library_path: str, ids: Optional[list[int]] = None
 ) -> list[tuple[int, str, Optional[str], Optional[str]]]:
-    """Return (book_id, title, author, isbn) for the given ids (or the whole library)."""
+    """Return (book_id, title, author, isbn) for the given ids (or the whole library).
+
+    Flat queries rather than a correlated subquery per book for authors/isbn -
+    the latter is 1 + 2N round trips through sqlite for N books, cheap on local
+    disk but a real stall on a network-mounted library (every one of those
+    lookups pays the network's per-call latency, not just disk seek time).
+    """
+    if ids is not None and not ids:
+        return []
+
     conn = _connect(library_path)
     try:
-        where = ""
-        params: list[Any] = []
-        if ids is not None:
-            if not ids:
-                return []
-            where = f"WHERE b.id IN ({','.join('?' * len(ids))})"
-            params = list(ids)
+        params: list[Any] = list(ids) if ids is not None else []
+        placeholders = ",".join("?" * len(params))
+        books_filter = f"WHERE b.id IN ({placeholders})" if ids is not None else ""
+        authors_filter = f"WHERE bal.book IN ({placeholders})" if ids is not None else ""
+        isbn_filter = f"AND book IN ({placeholders})" if ids is not None else ""
+
         rows = conn.execute(
-            f"""
-            SELECT b.id AS id, b.title AS title, b.author_sort AS author_sort,
-                   (SELECT GROUP_CONCAT(a.name, ' & ')
-                      FROM books_authors_link bal JOIN authors a ON a.id = bal.author
-                     WHERE bal.book = b.id) AS authors,
-                   (SELECT val FROM identifiers
-                     WHERE book = b.id AND type IN ('isbn','isbn13','isbn10') LIMIT 1) AS isbn
-              FROM books b {where}
-            """,
+            f"SELECT b.id AS id, b.title AS title, b.author_sort AS author_sort FROM books b {books_filter}",
             params,
         ).fetchall()
+        if not rows:
+            return []
+
+        authors_by_book: dict[int, list[str]] = {}
+        for r in conn.execute(
+            f"""
+            SELECT bal.book AS book_id, a.name AS name
+              FROM books_authors_link bal JOIN authors a ON a.id = bal.author
+              {authors_filter}
+            """,
+            params,
+        ):
+            authors_by_book.setdefault(int(r["book_id"]), []).append(r["name"])
+
+        isbn_by_book: dict[int, str] = {}
+        for r in conn.execute(
+            f"""
+            SELECT book, val FROM identifiers
+             WHERE type IN ('isbn','isbn13','isbn10') {isbn_filter}
+            """,
+            params,
+        ):
+            isbn_by_book.setdefault(int(r["book"]), r["val"])
+
         return [
-            (int(r["id"]), r["title"] or "", r["authors"] or r["author_sort"], r["isbn"])
+            (
+                int(r["id"]),
+                r["title"] or "",
+                " & ".join(authors_by_book.get(int(r["id"]), [])) or r["author_sort"],
+                isbn_by_book.get(int(r["id"])),
+            )
             for r in rows
         ]
     finally:
@@ -382,20 +411,27 @@ def _load_catalog(conn) -> tuple[list, dict]:
     catalog: list of (book_id, title_tokens, author_tokens)
     isbn_map: {normalized_isbn: book_id}
     """
-    rows = conn.execute(
+    # Two flat queries instead of a per-book correlated subquery for authors -
+    # the latter is 1 + N round trips through sqlite for N books, which is
+    # cheap on local disk but can turn into a real stall on a network-mounted
+    # library (each of those N lookups pays the network's per-call latency).
+    authors_by_book: dict[int, list[str]] = {}
+    for r in conn.execute(
         """
-        SELECT b.id AS id, b.title AS title, b.author_sort AS author_sort,
-               (SELECT GROUP_CONCAT(a.name, ' ')
-                  FROM books_authors_link bal JOIN authors a ON a.id = bal.author
-                 WHERE bal.book = b.id) AS authors
-          FROM books b
+        SELECT bal.book AS book_id, a.name AS name
+          FROM books_authors_link bal JOIN authors a ON a.id = bal.author
         """
-    ).fetchall()
+    ):
+        authors_by_book.setdefault(int(r["book_id"]), []).append(r["name"])
+
+    rows = conn.execute("SELECT id, title, author_sort FROM books").fetchall()
     catalog = [
         (
             int(r["id"]),
             _title_tokens(r["title"] or ""),
-            _author_tokens(f"{r['authors'] or ''} {r['author_sort'] or ''}"),
+            _author_tokens(
+                f"{' '.join(authors_by_book.get(int(r['id']), []))} {r['author_sort'] or ''}"
+            ),
         )
         for r in rows
     ]

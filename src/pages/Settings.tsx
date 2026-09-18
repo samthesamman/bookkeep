@@ -1157,7 +1157,7 @@ export default function Settings() {
   };
 
   const handleSaveJobSchedule = () => {
-    if (!editingJob || !selectedInterval) return;
+    if (!editingJob) return;
     updateJobMutation.mutate({
       jobName: editingJob.name,
       intervalSeconds: selectedInterval,

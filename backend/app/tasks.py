@@ -2,6 +2,7 @@
 Background tasks for refreshing seed data
 """
 import asyncio
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 from sqlalchemy.orm import Session
@@ -885,12 +886,33 @@ async def import_calibre_books() -> None:
             logger.info("import_calibre_books_skipped", reason="overlay_disabled")
             return
 
+        # Timed per phase - each of these has turned out to hide an accidental
+        # O(library size) sqlite access pattern at least once, and that only
+        # shows up as "the app is unresponsive" with nothing else to go on.
+        # If it happens again, these durations say which phase to look at
+        # instead of re-deriving it from scratch.
+        t0 = time.monotonic()
         try:
-            calibre_link_service.heal_stale_links(db, library_path)
-            calibre_link_service.backfill_fuzzy_links(db, library_path)
+            healed = calibre_link_service.heal_stale_links(db, library_path)
         except Exception as e:
-            logger.error("import_calibre_books_link_error", error=str(e))
+            logger.error("import_calibre_books_link_error", phase="heal_stale_links", error=str(e))
             db.rollback()
+            healed = None
+        t1 = time.monotonic()
+        try:
+            backfilled = calibre_link_service.backfill_fuzzy_links(db, library_path)
+        except Exception as e:
+            logger.error("import_calibre_books_link_error", phase="backfill_fuzzy_links", error=str(e))
+            db.rollback()
+            backfilled = None
+        t2 = time.monotonic()
+        logger.info(
+            "import_calibre_books_link_phase_complete",
+            healed=healed,
+            backfilled=backfilled,
+            heal_seconds=round(t1 - t0, 2),
+            backfill_seconds=round(t2 - t1, 2),
+        )
 
         imported = 0
         try:
@@ -900,8 +922,15 @@ async def import_calibre_books() -> None:
         except Exception as e:
             logger.error("import_calibre_books_import_error", error=str(e))
             db.rollback()
+        t3 = time.monotonic()
 
-        logger.info("import_calibre_books_complete", imported=imported)
+        logger.info(
+            "import_calibre_books_complete",
+            imported=imported,
+            heal_seconds=round(t1 - t0, 2),
+            backfill_seconds=round(t2 - t1, 2),
+            import_seconds=round(t3 - t2, 2),
+        )
     except Exception as e:
         logger.error("import_calibre_books_error", error=str(e))
         db.rollback()
