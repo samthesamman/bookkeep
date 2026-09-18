@@ -730,14 +730,22 @@ async def _enrich_calibre_metadata(db: Session, *, limit: int) -> int:
 async def _import_unlinked_calibre_books(
     db: Session, library_path: str, *, limit: int
 ) -> int:
-    """Give a ``Book`` row + metadata to Calibre books that have neither.
+    """Give a ``Book`` row to Calibre books that have neither, and link the rest.
 
     ``backfill_fuzzy_links`` only links library books that already match a row in
-    our ``books`` table, so a side-loaded book we have never seen stays
-    "metadata from Calibre only" forever. For each such book this reuses an
-    existing unlinked ``Book`` for the same work (fuzzy title+author) or creates
-    one from the Calibre identity, enriches it (Open Library, then Hardcover),
-    and links it — a freshly created row only when something was actually found.
+    our ``books`` table by a straightforward ISBN/title/author match, so a
+    side-loaded book we have never seen stays "metadata from Calibre only"
+    forever. For each such book:
+
+    * If it reuses an existing unlinked ``Book`` row for the same work (e.g.
+      its audiobook already came in from Audiobookshelf) - just link it. That
+      row was already resolved through its own path and doesn't need a fresh
+      API lookup on our account.
+    * Otherwise it's genuinely new to us: create a bare row from the Calibre
+      identity, enrich it (Open Library, then Hardcover) since a bare
+      title/author copied from Calibre isn't useful on its own, and link it -
+      only keeping the row if something was actually found.
+
     Bounded per run.
     """
     from app.services import book_metadata, calibre_service, calibre_link_service
@@ -793,8 +801,19 @@ async def _import_unlinked_calibre_books(
             )
             if cand is not None and calibre_link_service.get_link_for_book(db, cand.id) is None:
                 book = cand
-        fresh_row = book is None
-        if book is None:
+
+        if book is not None:
+            # Matched an existing row - it was already resolved through its own
+            # path (download, request, Audiobookshelf sync). Nothing to enrich,
+            # just link the two records together; don't touch last_refreshed,
+            # since we haven't actually checked anything here - that would just
+            # make sync_calibre_metadata's staleness check think this book was
+            # just verified and skip it for the next 7 days.
+            if has_ebook and not book.ebook_available:
+                book.ebook_available = True
+        else:
+            # Genuinely new to us - a bare title/author copied from Calibre
+            # isn't useful on its own, so this is the one case worth an API call.
             book = Book(
                 title=title,
                 author=author or "Unknown Author",
@@ -813,25 +832,25 @@ async def _import_unlinked_calibre_books(
                     error=str(exc),
                 )
                 continue
-        elif has_ebook and not book.ebook_available:
-            # Reused an existing record — this Calibre file makes its ebook available.
-            book.ebook_available = True
 
-        try:
-            found = await book_metadata.enrich_book(
-                db, book, resolve_hardcover=True, calibre_book_id=cal_id
-            )
-        except Exception as exc:
-            logger.warning("calibre_metadata_enrich_failed", calibre_id=cal_id, error=str(exc))
-            db.rollback()
-            continue
+            try:
+                found = await book_metadata.enrich_book(
+                    db, book, resolve_hardcover=True, calibre_book_id=cal_id
+                )
+            except Exception as exc:
+                logger.warning("calibre_metadata_enrich_failed", calibre_id=cal_id, error=str(exc))
+                db.rollback()
+                continue
 
-        if fresh_row and not found and not book.hardcover_id:
-            # Nothing to show for this book — leave it "Calibre only" rather than
-            # keeping a bare linked row that looks enriched but is not.
-            db.rollback()
-            await asyncio.sleep(0.5)
-            continue
+            if not found and not book.hardcover_id:
+                # Nothing to show for this book — leave it "Calibre only" rather than
+                # keeping a bare linked row that looks enriched but is not.
+                db.rollback()
+                await asyncio.sleep(0.5)
+                continue
+
+            if book.last_refreshed is None:
+                book.last_refreshed = datetime.now(timezone.utc)
 
         calibre_link_service.upsert_link(
             db,
@@ -844,8 +863,6 @@ async def _import_unlinked_calibre_books(
             calibre_title=title,
             commit=False,
         )
-        if book.last_refreshed is None:
-            book.last_refreshed = datetime.now(timezone.utc)
         try:
             db.commit()
             created += 1
