@@ -38,9 +38,9 @@ JOB_DEFINITIONS = {
         "description": "Import audiobooks from Audiobookshelf library",
         "type": "PROCESS",
     },
-    "sync_missing_metadata": {
+    "sync_audiobook_metadata": {
         "default_interval": 6 * 60 * 60,  # 6 hours
-        "description": "Fetch missing book metadata from Hardcover",
+        "description": "Fetch missing Hardcover metadata for non-Calibre-linked books (mainly audiobooks)",
         "type": "PROCESS",
     },
     "sync_download_states": {
@@ -348,7 +348,7 @@ def _job_functions() -> Dict[str, Callable]:
         check_processing_requests,
         sync_from_booklore,
         sync_from_audiobookshelf,
-        sync_missing_metadata,
+        sync_audiobook_metadata,
         sync_download_states,
         sync_hardcover_lists,
         send_availability_emails,
@@ -363,7 +363,7 @@ def _job_functions() -> Dict[str, Callable]:
         "check_processing_requests": check_processing_requests,
         "sync_from_booklore": sync_from_booklore,
         "sync_from_audiobookshelf": sync_from_audiobookshelf,
-        "sync_missing_metadata": sync_missing_metadata,
+        "sync_audiobook_metadata": sync_audiobook_metadata,
         "sync_download_states": sync_download_states,
         "sync_hardcover_lists": sync_hardcover_lists,
         "send_availability_emails": send_availability_emails,

@@ -24,7 +24,7 @@ DEFAULT_JOBS = {
     "check_processing_requests": {"interval_seconds": 5 * 60, "type": "PROCESS"},
     "sync_from_booklore": {"interval_seconds": 24 * 60 * 60, "type": "PROCESS"},
     "sync_from_audiobookshelf": {"interval_seconds": 24 * 60 * 60, "type": "PROCESS"},
-    "sync_missing_metadata": {"interval_seconds": 6 * 60 * 60, "type": "PROCESS"},
+    "sync_audiobook_metadata": {"interval_seconds": 6 * 60 * 60, "type": "PROCESS"},
     "sync_hardcover_lists": {"interval_seconds": 6 * 60 * 60, "type": "PROCESS"},
     "send_availability_emails": {"interval_seconds": 5 * 60, "type": "PROCESS"},
     "reconcile_calibre_library": {"interval_seconds": 24 * 60 * 60, "type": "PROCESS"},

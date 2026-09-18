@@ -1994,17 +1994,17 @@ async def sync_from_audiobookshelf():
 
 async def run_background_metadata_sync():
     """Background task to sync missing metadata periodically"""
-    job_name = "sync_missing_metadata"
-    
+    job_name = "sync_audiobook_metadata"
+
     # Wait until next scheduled execution before first run
     initial_wait = get_seconds_until_next_execution(job_name)
     if initial_wait > 0:
         logger.info("background_metadata_sync_waiting", seconds=initial_wait)
         await asyncio.sleep(initial_wait)
-    
+
     while True:
         try:
-            await sync_missing_metadata()
+            await sync_audiobook_metadata()
             update_job_execution(job_name)
         except Exception as e:
             logger.error("background_metadata_sync_error", error=str(e))
@@ -2024,7 +2024,7 @@ def get_job_interval(job_name: str, db: Session) -> int:
         "check_processing_requests": 5 * 60,
         "sync_from_booklore": 24 * 60 * 60,
         "sync_from_audiobookshelf": 24 * 60 * 60,
-        "sync_missing_metadata": 6 * 60 * 60,
+        "sync_audiobook_metadata": 6 * 60 * 60,
     }
     
     try:
@@ -2037,166 +2037,120 @@ def get_job_interval(job_name: str, db: Session) -> int:
     return defaults.get(job_name, 3600)
 
 
-async def sync_missing_metadata():
+async def sync_audiobook_metadata():
+    """Fill in missing Hardcover metadata for books Calibre doesn't know about.
+
+    Runs every 6 hours. Complements ``sync_calibre_metadata``, which only
+    enriches Calibre-linked books - this job covers everything else, which in
+    practice is almost entirely audiobook-only ``Book`` rows synced in from
+    Audiobookshelf (the filter is "no CalibreBookLink", not "is an audiobook",
+    so an ebook that hasn't been picked up by ``import_calibre_books`` yet
+    would also qualify, but that's the uncommon case). Targets four gaps, each
+    capped per run:
+
+    1. Has a ``hardcover_slug`` but never resolved the numeric ``hardcover_id``.
+    2. No cover and no ``hardcover_id`` yet (needs a title/author search).
+    3. Has a ``hardcover_id`` but no rating.
+    4. Has a ``hardcover_id`` and a series name/position but no ``series_id``.
+
+    Uses the same ``book_metadata.enrich_book`` merge (Open Library +
+    Hardcover, matching ``sync_calibre_metadata``'s enrichment) as the rest of
+    the app, instead of a separate hand-rolled Hardcover-only merge.
     """
-    Find books in the database that are missing metadata (no hardcover_id, 
-    no cover, no rating, etc.) and look them up on Hardcover.
-    """
-    from app.routers.hardcover import lookup_book_by_slug, lookup_book_by_title_author
-    
+    from app.services import book_metadata
+    from app.models import CalibreBookLink
+
     db: Session = SessionLocal()
     try:
-        # Find books missing key metadata
-        # Priority 1: Books with hardcover_slug but no hardcover_id (numeric)
-        # Priority 2: Books without cover_url
-        # Priority 3: Books without rating
-        
+        # Anything Calibre-linked is sync_calibre_metadata's job - excluding it
+        # here avoids the two jobs re-fetching the same books from Hardcover.
+        linked_ids = db.query(CalibreBookLink.book_id)
+
         books_with_slug_no_id = db.query(Book).filter(
             Book.hardcover_slug.isnot(None),
-            Book.hardcover_id.is_(None)
-        ).all()
-        
+            Book.hardcover_id.is_(None),
+            Book.id.notin_(linked_ids),
+        ).limit(50).all()
+
         books_without_cover = db.query(Book).filter(
             Book.cover_url.is_(None),
-            Book.hardcover_id.is_(None)
+            Book.hardcover_id.is_(None),
+            Book.id.notin_(linked_ids),
         ).limit(50).all()  # Limit to avoid too many API calls
-        
+
         books_without_rating = db.query(Book).filter(
             Book.rating.is_(None),
-            Book.hardcover_id.isnot(None)
+            Book.hardcover_id.isnot(None),
+            Book.id.notin_(linked_ids),
         ).limit(50).all()
-        
-        # Books with hardcover_id but missing series_id (and have a series name or position)
+
         books_without_series_id = db.query(Book).filter(
             Book.hardcover_id.isnot(None),
             Book.series_id.is_(None),
-            or_(Book.series.isnot(None), Book.series_position.isnot(None))
+            or_(Book.series.isnot(None), Book.series_position.isnot(None)),
+            Book.id.notin_(linked_ids),
         ).limit(50).all()
-        
+
         # Combine and dedupe
-        all_books = {b.id: b for b in books_with_slug_no_id + books_without_cover + books_without_rating + books_without_series_id}
-        
+        all_books = {
+            b.id: b
+            for b in books_with_slug_no_id
+            + books_without_cover
+            + books_without_rating
+            + books_without_series_id
+        }
+
         if not all_books:
-            logger.info("sync_missing_metadata_skipped", reason="no_books_need_update")
+            logger.info("sync_audiobook_metadata_skipped", reason="no_books_need_update")
             return
-        
-        logger.info("sync_missing_metadata_starting", 
-                   books_count=len(all_books),
-                   with_slug_no_id=len(books_with_slug_no_id),
-                   without_cover=len(books_without_cover),
-                   without_rating=len(books_without_rating),
-                   without_series_id=len(books_without_series_id))
-        
+
+        logger.info(
+            "sync_audiobook_metadata_starting",
+            books_count=len(all_books),
+            with_slug_no_id=len(books_with_slug_no_id),
+            without_cover=len(books_without_cover),
+            without_rating=len(books_without_rating),
+            without_series_id=len(books_without_series_id),
+        )
+
         updated_count = 0
         failed_count = 0
-        skipped_duplicates = 0
-        
+
         for book_id, book in all_books.items():
             try:
-                hardcover_data = None
-                
-                # Try slug first
-                if book.hardcover_slug:
-                    hardcover_data = await lookup_book_by_slug(book.hardcover_slug, db)
-                    await asyncio.sleep(0.5)  # Rate limit protection
-                
-                # Try title/author if no data yet
-                if not hardcover_data and book.title:
-                    hardcover_data = await lookup_book_by_title_author(book.title, book.author, db)
-                    await asyncio.sleep(0.5)  # Rate limit protection
-                
-                if hardcover_data:
-                    new_hardcover_id = hardcover_data.get("id")
-                    
-                    # Check if another book already has this hardcover_id
-                    if new_hardcover_id:
-                        existing = db.query(Book).filter(
-                            Book.hardcover_id == new_hardcover_id,
-                            Book.id != book.id
-                        ).first()
-                        
-                        if existing:
-                            # Another book has this ID - skip this one (it's a duplicate)
-                            logger.info("book_skipped_duplicate_hardcover_id",
-                                      book_id=book.id,
-                                      hardcover_id=new_hardcover_id,
-                                      title=book.title,
-                                      existing_book_id=existing.id,
-                                      existing_title=existing.title)
-                            skipped_duplicates += 1
-                            continue
-                    
-                    # Update book with Hardcover data
-                    book.hardcover_id = new_hardcover_id
-                    book.hardcover_slug = hardcover_data.get("slug") or book.hardcover_slug
-                    
-                    # Update cover
-                    cached_image = hardcover_data.get("cached_image")
-                    if cached_image and isinstance(cached_image, dict):
-                        book.cover_url = cached_image.get("url") or book.cover_url
-                    
-                    # Update other metadata
-                    book.description = hardcover_data.get("description") or book.description
-                    book.page_count = hardcover_data.get("pages") or book.page_count
-                    book.rating = hardcover_data.get("rating") or book.rating
-                    book.ratings_count = hardcover_data.get("ratings_count") or book.ratings_count
-                    book.users_count = hardcover_data.get("users_count") or book.users_count
-                    
-                    # Update series info
-                    book_series = hardcover_data.get("book_series", [])
-                    if book_series and len(book_series) > 0:
-                        first_series = book_series[0]
-                        series_info = first_series.get("series", {})
-                        book.series = series_info.get("name") or book.series
-                        book.series_id = series_info.get("id") or book.series_id
-                        book.series_position = first_series.get("position") or book.series_position
-                    
-                    # Update genres
-                    taggings = hardcover_data.get("taggings", [])
-                    if taggings:
-                        genres = ", ".join([t.get("tag", {}).get("tag", "") for t in taggings if t.get("tag", {}).get("tag")])
-                        if genres:
-                            book.genres = genres
-                    
-                    book.last_refreshed = datetime.now(timezone.utc)
-                    db.add(book)
-                    
-                    try:
-                        db.commit()
-                        updated_count += 1
-                        logger.debug("book_metadata_updated",
-                                   book_id=book.id,
-                                   hardcover_id=book.hardcover_id,
-                                   title=book.title)
-                    except Exception as commit_error:
-                        db.rollback()
-                        logger.warning("book_metadata_commit_failed",
-                                     book_id=book.id,
-                                     error=str(commit_error))
-                        failed_count += 1
-                else:
-                    logger.debug("book_not_found_on_hardcover",
-                               book_id=book.id,
-                               title=book.title,
-                               slug=book.hardcover_slug)
-                    failed_count += 1
-                    
+                changed = await book_metadata.enrich_book(db, book, resolve_hardcover=True)
             except Exception as e:
-                logger.warning("sync_missing_metadata_book_error",
-                             book_id=book.id,
-                             title=book.title,
-                             error=str(e))
-                failed_count += 1
+                logger.warning(
+                    "sync_audiobook_metadata_book_error", book_id=book_id, title=book.title, error=str(e)
+                )
                 db.rollback()
-        
-        logger.info("sync_missing_metadata_complete",
-                   total_books=len(all_books),
-                   updated=updated_count,
-                   skipped_duplicates=skipped_duplicates,
-                   failed=failed_count)
+                failed_count += 1
+                await asyncio.sleep(0.5)
+                continue
+
+            if book.last_refreshed is None:
+                book.last_refreshed = datetime.now(timezone.utc)
+            try:
+                db.commit()
+                if changed:
+                    updated_count += 1
+            except Exception as commit_error:
+                db.rollback()
+                logger.warning(
+                    "sync_audiobook_metadata_commit_failed", book_id=book_id, error=str(commit_error)
+                )
+                failed_count += 1
+            await asyncio.sleep(0.5)  # Rate limit protection
+
+        logger.info(
+            "sync_audiobook_metadata_complete",
+            total_books=len(all_books),
+            updated=updated_count,
+            failed=failed_count,
+        )
 
     except Exception as e:
-        logger.error("sync_missing_metadata_error", error=str(e))
+        logger.error("sync_audiobook_metadata_error", error=str(e))
         db.rollback()
     finally:
         db.close()
