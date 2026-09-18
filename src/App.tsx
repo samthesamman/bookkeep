@@ -26,6 +26,7 @@ const Requests = lazy(() => import("@/pages/Requests"));
 const Downloads = lazy(() => import("@/pages/Downloads"));
 const Admin = lazy(() => import("@/pages/Admin"));
 const Users = lazy(() => import("@/pages/Users"));
+const MissingHardcoverBooks = lazy(() => import("@/pages/MissingHardcoverBooks"));
 const Settings = lazy(() => import("@/pages/Settings"));
 const Profile = lazy(() => import("@/pages/Profile"));
 const Tasks = lazy(() => import("@/pages/Tasks"));
@@ -89,6 +90,7 @@ const App = () => (
                     <Route element={<AdminRouteGuard />}>
                       <Route path="/admin" element={<Admin />} />
                       <Route path="/admin/users" element={<Users />} />
+                      <Route path="/admin/missing-hardcover" element={<MissingHardcoverBooks />} />
                     </Route>
                   </Route>
                 </Route>

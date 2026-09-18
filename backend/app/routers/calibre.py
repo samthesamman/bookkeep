@@ -244,6 +244,61 @@ async def list_books(
     return {"books": books, "total": total, "page": page, "page_size": page_size}
 
 
+class MissingHardcoverBook(BaseModel):
+    book_id: int
+    calibre_book_id: int
+    title: str
+    author: Optional[str] = None
+    isbn: Optional[str] = None
+    cover_url: Optional[str] = None
+
+
+class MissingHardcoverResponse(BaseModel):
+    books: list[MissingHardcoverBook]
+    total: int
+
+
+# Registered before /books/{book_id} - "missing-hardcover-id" would otherwise
+# match that route's {book_id}: int path param and 422 on the literal string
+# before ever reaching this one.
+@router.get("/books/missing-hardcover-id", response_model=MissingHardcoverResponse)
+async def list_books_missing_hardcover_id(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+    db: Session = Depends(get_db),
+    _: models.User = Depends(require_admin),
+) -> MissingHardcoverResponse:
+    """Calibre-linked ebooks with no Hardcover match yet, for manual linking.
+
+    These are books ``import_calibre_books``/``sync_calibre_metadata`` either
+    never managed to resolve via search, or (since the "reuse an existing
+    Book row" path was made to skip enrichment entirely) inherited a gap from
+    whichever record they got linked to. Automated jobs stop short of guessing
+    here on purpose - a wrong match is worse than a missing one - so this is
+    what feeds the manual "search Hardcover and link it" flow instead.
+    """
+    q = (
+        db.query(models.CalibreBookLink, models.Book)
+        .join(models.Book, models.Book.id == models.CalibreBookLink.book_id)
+        .filter(models.Book.hardcover_id.is_(None))
+        .order_by(models.Book.title.asc())
+    )
+    total = q.count()
+    rows = q.offset((page - 1) * page_size).limit(page_size).all()
+    books = [
+        MissingHardcoverBook(
+            book_id=book.id,
+            calibre_book_id=link.calibre_book_id,
+            title=book.title,
+            author=book.author,
+            isbn=book.isbn,
+            cover_url=book.cover_url,
+        )
+        for link, book in rows
+    ]
+    return MissingHardcoverResponse(books=books, total=total)
+
+
 @router.get("/books/{book_id}")
 async def get_book(
     book_id: int,

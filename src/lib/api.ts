@@ -1503,6 +1503,20 @@ export interface CalibreByHardcover {
   format_details: Array<{ format: string; size: number | null; name: string }>;
 }
 
+export interface MissingHardcoverBook {
+  book_id: number;
+  calibre_book_id: number;
+  title: string;
+  author: string | null;
+  isbn: string | null;
+  cover_url: string | null;
+}
+
+export interface MissingHardcoverResponse {
+  books: MissingHardcoverBook[];
+  total: number;
+}
+
 export interface CalibreBooksResponse {
   books: CalibreBook[];
   total: number;
@@ -1693,6 +1707,11 @@ export const calibreApi = {
     apiRequest<{ removed: boolean }>(`/api/calibre/books/${id}/link`, {
       method: 'DELETE',
     }),
+
+  getMissingHardcoverBooks: (page = 1, pageSize = 50) =>
+    apiRequest<MissingHardcoverResponse>(
+      `/api/calibre/books/missing-hardcover-id?page=${page}&page_size=${pageSize}`,
+    ),
 
   refreshMetadata: (id: number) =>
     apiRequest<CalibreLinkResponse>(`/api/calibre/books/${id}/refresh-metadata`, {
