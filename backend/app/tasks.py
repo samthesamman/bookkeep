@@ -760,6 +760,13 @@ async def _import_unlinked_calibre_books(
         logger.warning("calibre_metadata_identities_failed", error=str(exc))
         return 0
 
+    # Loaded once for the whole batch - find_matching_book re-scans this on
+    # every call, so re-fetching it per candidate would turn a several-hundred
+    # book run into that many full-table scans with no await point between
+    # them, freezing the app (single event loop, no worker threads) for the
+    # entire run.
+    book_rows = calibre_link_service.book_match_candidates(db)
+
     created = 0
     for cal_id, title, author, isbn in identities:
         if not title:
@@ -774,7 +781,9 @@ async def _import_unlinked_calibre_books(
             # Reuse an existing record for the same work (e.g. its audiobook came
             # in from Audiobookshelf first) as long as nothing else in Calibre is
             # already linked to it (CalibreBookLink is one-to-one).
-            cand = calibre_link_service.find_matching_book(db, title, author, isbn)
+            cand = calibre_link_service.find_matching_book(
+                db, title, author, isbn, candidates=book_rows
+            )
             if cand is not None and calibre_link_service.get_link_for_book(db, cand.id) is None:
                 book = cand
         fresh_row = book is None

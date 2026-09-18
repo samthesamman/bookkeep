@@ -470,8 +470,27 @@ def _match_calibre_book(
     return best_id
 
 
+def book_match_candidates(db: Session) -> list[tuple[int, Optional[str], Optional[str], Optional[str]]]:
+    """All ``(id, title, isbn, author)`` rows, for a batch of ``find_matching_book`` calls.
+
+    ``find_matching_book`` re-fetches and re-scans every ``Book`` row on every
+    call, which is fine for a one-off lookup but turns O(total books) into
+    O(candidates x total books) when called from a per-item import loop -
+    easily enough synchronous, un-yielding work (no ``await`` anywhere in this
+    scan) to stall the whole app for its duration on a sizeable library. A
+    caller processing many items in one run should fetch this once and pass it
+    as ``candidates`` to every call instead.
+    """
+    return db.query(Book.id, Book.title, Book.isbn, Book.author).all()
+
+
 def find_matching_book(
-    db: Session, title: str, author: Optional[str] = None, isbn: Optional[str] = None
+    db: Session,
+    title: str,
+    author: Optional[str] = None,
+    isbn: Optional[str] = None,
+    *,
+    candidates: Optional[list[tuple[int, Optional[str], Optional[str], Optional[str]]]] = None,
 ) -> Optional[Book]:
     """An existing ``Book`` row that is the same work as ``(title, author, isbn)``, or None.
 
@@ -483,6 +502,10 @@ def find_matching_book(
     Stricter than `_match_calibre_book`: when both sides name a (non-placeholder)
     author they must share a token — wrongly merging two different books is worse
     than missing a merge, which just leaves a second record to merge by hand.
+
+    Pass ``candidates`` (from ``book_match_candidates``) when calling this
+    repeatedly in one run, so each call scans an in-memory list instead of
+    re-querying and re-scanning the whole ``books`` table.
     """
     key = calibre_service._isbn_key(isbn)
     want_title = calibre_service._title_tokens(title or "")
@@ -490,11 +513,11 @@ def find_matching_book(
         return None
     want_author = calibre_service._author_tokens(author or "")
 
+    rows = candidates if candidates is not None else book_match_candidates(db)
+
     best_id: Optional[int] = None
     best_score = -1.0
-    for bid, btitle, bisbn, bauthor in db.query(
-        Book.id, Book.title, Book.isbn, Book.author
-    ).all():
+    for bid, btitle, bisbn, bauthor in rows:
         if key and calibre_service._isbn_key(bisbn) == key:
             return db.query(Book).filter(Book.id == bid).first()
         if not want_title:
