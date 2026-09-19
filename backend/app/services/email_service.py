@@ -190,6 +190,52 @@ def send_availability_notification(
     return log
 
 
+def send_admin_alert(db: Session, subject: str, body: str) -> list[models.EmailLog]:
+    """Notify every admin account by email. Best-effort per admin — a failure
+    (missing address, SMTP error) for one doesn't stop the others; each
+    attempt is logged like any other send.
+    """
+    admins = db.query(models.User).filter(models.User.is_admin == True).all()
+    logs: list[models.EmailLog] = []
+    if not admins:
+        return logs
+
+    config = get_smtp_config(db)
+    for admin in admins:
+        recipient = (admin.email or "").strip()
+        log = models.EmailLog(
+            user_id=admin.id,
+            recipient=recipient or "(not set)",
+            subject=subject,
+            status="success",
+        )
+        if not recipient:
+            log.status = "error"
+            log.error_message = "Admin has no account email address."
+        elif not config.configured:
+            log.status = "error"
+            log.error_message = "SMTP is not configured."
+        else:
+            message = EmailMessage()
+            message["Subject"] = subject
+            message["From"] = config.from_address
+            message["To"] = recipient
+            message.set_content(body)
+            try:
+                _deliver(config, message)
+            except EmailError as exc:
+                log.status = "error"
+                log.error_message = str(exc)
+        db.add(log)
+        logs.append(log)
+
+    db.commit()
+    for log in logs:
+        db.refresh(log)
+    logger.info("admin_alert_sent", subject=subject, recipients=len(admins))
+    return logs
+
+
 def send_book_email(
     db: Session,
     user: models.User,

@@ -291,9 +291,77 @@ async def run_background_refresh():
         logger.debug("background_refresh_sleeping", interval_seconds=interval)
         await asyncio.sleep(interval)
 
-# An ebook download that never shows up in Calibre is marked imported anyway
-# after this long, so requests don't hang forever on a misconfigured library.
-EBOOK_LIBRARY_WAIT_TIMEOUT = timedelta(days=7)
+# Extra margin added on top of sync_book_availability's own interval before an
+# unconfirmed ebook import gets flagged - covers a run that's briefly late/
+# skipped without immediately alerting on a single missed cycle.
+EBOOK_LIBRARY_WAIT_BUFFER = timedelta(minutes=30)
+
+
+def _ebook_library_wait_timeout(db: Session) -> timedelta:
+    """How long to wait for Calibre to index a completed ebook download before
+    flagging it for admin attention - one sync_book_availability cycle (that's
+    what actually checks) plus ``EBOOK_LIBRARY_WAIT_BUFFER``, so a normal run
+    always gets a fair chance before we give up on it. Re-read on every call
+    since the interval is admin-editable at runtime.
+    """
+    from app.models import JobSchedule
+
+    interval_seconds = 5 * 60  # sync_book_availability's default
+    try:
+        schedule = (
+            db.query(JobSchedule)
+            .filter(JobSchedule.job_name == "sync_book_availability")
+            .first()
+        )
+        if schedule and schedule.interval_seconds:
+            interval_seconds = schedule.interval_seconds
+    except Exception:
+        pass
+    return timedelta(seconds=interval_seconds) + EBOOK_LIBRARY_WAIT_BUFFER
+
+
+def _format_wait_duration(td: timedelta) -> str:
+    minutes = max(1, round(td.total_seconds() / 60))
+    hours, minutes = divmod(minutes, 60)
+    parts = []
+    if hours:
+        parts.append(f"{hours} hour{'s' if hours != 1 else ''}")
+    if minutes or not parts:
+        parts.append(f"{minutes} minute{'s' if minutes != 1 else ''}")
+    return " ".join(parts)
+
+
+def _alert_admins_of_stuck_import(db: Session, task, wait_timeout: timedelta) -> None:
+    """Tell admins a completed ebook download was never confirmed in Calibre.
+
+    Never raises - a broken SMTP config shouldn't block the reconcile loop.
+    """
+    from app.services.email_service import send_admin_alert
+
+    title = task.book.title if task.book else "Unknown title"
+    author = task.book.author if task.book and task.book.author else None
+    label = f'"{title}"' + (f" by {author}" if author else "")
+    wait_text = _format_wait_duration(wait_timeout)
+
+    try:
+        send_admin_alert(
+            db,
+            subject=f"Ebook import stuck: {label}",
+            body=(
+                f'The ebook download for {label} completed over {wait_text} ago, but it '
+                f"was never confirmed in the Calibre library.\n\n"
+                f"This usually means the file wasn't picked up by Calibre-Web or your "
+                f"watch folder, or its title/author metadata drifted too far for "
+                f"Bookkeep's fuzzy matcher to find it.\n\n"
+                f"Download task ID: {task.id}\n"
+                f"Book ID: {task.book_id}\n\n"
+                f"Check that the file actually made it into your Calibre library. "
+                f"Bookkeep will keep checking automatically and will link it as soon as "
+                f"it's found - no need to do anything here unless the import is broken."
+            ),
+        )
+    except Exception as exc:
+        logger.warning("admin_alert_failed", task_id=task.id, error=str(exc))
 
 
 def reconcile_ebook_library_imports(
@@ -305,10 +373,19 @@ def reconcile_ebook_library_imports(
     library is configured; this checks that library for each one and flips it to
     'imported' (also marking the book available). Returns the ``book_id``s that
     were just promoted, so the caller can refresh their metadata.
+
+    A download that never shows up in Calibre within the wait timeout (see
+    ``_ebook_library_wait_timeout``) is NOT force-promoted - that would falsely
+    tell the requester their book is available when it might not be. Instead,
+    admins get a one-time alert email and the task keeps getting checked on
+    every future run, so it still heals itself once the underlying Calibre
+    import is fixed.
     """
     from app.models import DownloadTask
     from app.routers.calibre import get_active_library_path
     from app.services import calibre_service, calibre_link_service
+
+    wait_timeout = _ebook_library_wait_timeout(db)
 
     tasks = (
         db.query(DownloadTask)
@@ -346,57 +423,68 @@ def reconcile_ebook_library_imports(
 
     now = datetime.now(timezone.utc)
     promoted: list[int] = []
+    changed = False
     for task in tasks:
-        found = matched_ids.get(task.id) is not None
-
-        timed_out = False
-        if not found:
-            completed_at = task.completed_at or task.updated_at or task.created_at
-            if completed_at is not None and completed_at.tzinfo is None:
-                completed_at = completed_at.replace(tzinfo=timezone.utc)
-            if completed_at is not None and (now - completed_at) >= EBOOK_LIBRARY_WAIT_TIMEOUT:
-                timed_out = True
-
-        if not found and not timed_out:
+        calibre_id = matched_ids.get(task.id)
+        if calibre_id is not None:
+            task.import_status = "imported"
+            task.imported_at = now
+            task.import_message = "Indexed by Calibre"
+            if task.book:
+                task.book.ebook_available = True
+                # Exact link: this download is this Calibre book.
+                try:
+                    calibre_link_service.upsert_link(
+                        db,
+                        calibre_book_id=calibre_id,
+                        book_id=task.book_id,
+                        source="download",
+                        confidence=None,
+                        confirmed=True,
+                        calibre_isbn=task.book.isbn,
+                        calibre_title=task.book.title,
+                        commit=False,
+                    )
+                except Exception as exc:  # never block the import promotion
+                    logger.warning("calibre_link_on_import_failed", task_id=task.id, error=str(exc))
+            if task.book_id is not None:
+                promoted.append(task.book_id)
+            changed = True
+            logger.info(
+                "ebook_import_confirmed",
+                task_id=task.id,
+                book_id=task.book_id,
+                book_title=task.book.title if task.book else None,
+                book_author=task.book.author if task.book else None,
+                matched_calibre_id=calibre_id,
+            )
             continue
 
-        task.import_status = "imported"
-        task.imported_at = now
-        task.import_message = (
-            "Indexed by Calibre" if found
-            else "Marked imported after waiting for the Calibre library"
-        )
-        if task.book:
-            task.book.ebook_available = True
-        if found and task.book:
-            # Exact link: this download is this Calibre book.
-            try:
-                calibre_link_service.upsert_link(
-                    db,
-                    calibre_book_id=matched_ids[task.id],
-                    book_id=task.book_id,
-                    source="download",
-                    confidence=None,
-                    confirmed=True,
-                    calibre_isbn=task.book.isbn,
-                    calibre_title=task.book.title,
-                    commit=False,
-                )
-            except Exception as exc:  # never block the import promotion
-                logger.warning("calibre_link_on_import_failed", task_id=task.id, error=str(exc))
-        if task.book_id is not None:
-            promoted.append(task.book_id)
-        logger.info(
-            "ebook_import_confirmed",
-            task_id=task.id,
-            book_id=task.book_id,
-            book_title=task.book.title if task.book else None,
-            book_author=task.book.author if task.book else None,
-            matched_calibre_id=matched_ids.get(task.id),
-            reason="calibre" if found else "timeout",
-        )
+        # Not found in the library yet - check whether it's been long enough
+        # to flag instead of quietly waiting forever.
+        completed_at = task.completed_at or task.updated_at or task.created_at
+        if completed_at is not None and completed_at.tzinfo is None:
+            completed_at = completed_at.replace(tzinfo=timezone.utc)
+        if completed_at is None or (now - completed_at) < wait_timeout:
+            continue
 
-    if promoted:
+        if task.admin_alerted_at is None:
+            task.admin_alerted_at = now
+            task.import_message = (
+                f"Download completed but not confirmed in the Calibre library "
+                f"after {_format_wait_duration(wait_timeout)} - admin notified"
+            )
+            changed = True
+            logger.warning(
+                "ebook_import_stuck",
+                task_id=task.id,
+                book_id=task.book_id,
+                book_title=task.book.title if task.book else None,
+                book_author=task.book.author if task.book else None,
+            )
+            _alert_admins_of_stuck_import(db, task, wait_timeout)
+
+    if changed:
         db.commit()
         logger.info(
             "reconcile_ebook_library_imports_complete",

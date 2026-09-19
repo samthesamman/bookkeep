@@ -326,6 +326,10 @@ class DownloadTask(Base):
     import_status = Column(String(20), server_default='pending', nullable=True)  # pending, importing, awaiting_library, imported, failed, skipped
     import_message = Column(String(500), nullable=True)  # Error message or status details
     imported_at = Column(DateTime(timezone=True), nullable=True)
+    # Set once an admin alert has been sent for a download stuck in
+    # awaiting_library too long - dedupes the alert across job runs (see
+    # reconcile_ebook_library_imports / _ebook_library_wait_timeout in tasks.py).
+    admin_alerted_at = Column(DateTime(timezone=True), nullable=True)
 
     # Timestamps
     created_at = Column(DateTime(timezone=True), server_default=func.now())
