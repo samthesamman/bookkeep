@@ -25,6 +25,20 @@ import { useUser } from '@/contexts/UserContext';
 import { usePageVisibility } from '@/hooks/usePageVisibility';
 import { useCalibreCover } from '@/hooks/useCalibreCover';
 
+// Descriptions can arrive as HTML (Calibre comments, some metadata sources)
+// or as plain text with literal newlines (Hardcover). Convert block-level
+// HTML breaks into newlines before stripping tags, so paragraph structure
+// survives into the plain-text rendering (paired with `whitespace-pre-line`).
+const htmlBreaksToNewlines = (s: string) =>
+  s
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/(p|div)>/gi, '\n\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/\r\n/g, '\n')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+
 export default function BookDetails() {
   const { id } = useParams();
   const [searchParams] = useSearchParams();
@@ -302,7 +316,7 @@ export default function BookDetails() {
 
   const cleanDescription = (html: string) => {
     if (!html) return 'No description available.';
-    return html.replace(/<[^>]*>/g, '').trim();
+    return htmlBreaksToNewlines(html);
   };
 
   const ebookAvailable =
@@ -361,7 +375,7 @@ export default function BookDetails() {
     : [];
 
   const stripTags = (s: string | null | undefined) =>
-    clean(s?.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim());
+    clean(s ? htmlBreaksToNewlines(s) : s);
 
   const local = calBook
     ? {
@@ -857,7 +871,7 @@ export default function BookDetails() {
               {/* Description */}
               <div className="order-last md:order-none max-w-2xl">
                 <h2 className="text-base md:text-lg font-semibold text-foreground mb-2 md:mb-3">Description</h2>
-                <p className="text-sm md:text-base text-muted-foreground leading-relaxed">
+                <p className="text-sm md:text-base text-muted-foreground leading-relaxed whitespace-pre-line">
                   {cleanDescription(displayDescription)}
                 </p>
               </div>

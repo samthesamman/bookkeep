@@ -3,7 +3,8 @@
 The NYT Books API is the authoritative source for the "NYT Best Sellers" lists.
 It is free but rate limited (a few requests/minute, ~500-1000/day) and its terms
 require visible attribution.  We only ever make one ``full-overview`` call per day
-(cached), plus a ``names`` call when an admin opens the Settings picker.
+(cached); the same response also seeds the Settings picker's catalogue, since
+NYT no longer serves a standalone list-names endpoint.
 
 The API key is read from the ``NYT_BOOKS_API_KEY`` environment variable only.
 """
@@ -67,26 +68,6 @@ async def _get_json(path: str, params: Optional[dict] = None) -> Optional[dict]:
     return None
 
 
-async def fetch_list_names() -> list[dict[str, Any]]:
-    """Return the catalogue of Best Sellers lists (for the Settings picker)."""
-    data = await _get_json("/lists/names.json")
-    if not data:
-        return []
-    results = data.get("results") or []
-    return [
-        {
-            "list_name": item.get("list_name"),
-            "list_name_encoded": item.get("list_name_encoded"),
-            "display_name": item.get("display_name") or item.get("list_name"),
-            "updated": item.get("updated"),
-            "oldest_published_date": item.get("oldest_published_date"),
-            "newest_published_date": item.get("newest_published_date"),
-        }
-        for item in results
-        if item.get("list_name_encoded")
-    ]
-
-
 def _catalog_from_lists(lists: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Extract the {name, slug, updated} catalogue from list objects."""
     return [
@@ -106,13 +87,10 @@ def _catalog_from_lists(lists: list[dict[str, Any]]) -> list[dict[str, Any]]:
 async def fetch_list_catalog() -> list[dict[str, Any]]:
     """Return the catalogue of selectable lists.
 
-    Tries ``names.json`` first; if that fails (commonly a transient 429), derives
-    the catalogue from the ``full-overview`` payload instead, which lists every
-    currently-published list with its display name and update cadence.
+    NYT no longer serves a standalone list-names endpoint, so the catalogue is
+    derived from the ``full-overview``/``overview`` payload, which lists every
+    currently-published list along with its display name and update cadence.
     """
-    names = await fetch_list_names()
-    if names:
-        return names
     return _catalog_from_lists(await fetch_full_overview())
 
 
