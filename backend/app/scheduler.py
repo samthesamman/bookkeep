@@ -23,9 +23,9 @@ JOB_DEFINITIONS = {
         "description": "Fetch new books from Hardcover API",
         "type": "PROCESS",
     },
-    "check_processing_requests": {
+    "sync_book_availability": {
         "default_interval": 5 * 60,  # 5 minutes
-        "description": "Check download tasks for completed requests",
+        "description": "Match processing requests against download/Calibre state and mark them available",
         "type": "PROCESS",
     },
     "sync_from_booklore": {
@@ -63,9 +63,9 @@ JOB_DEFINITIONS = {
         "description": "Email available books to users who opted in when requesting",
         "type": "PROCESS",
     },
-    "sync_ebook_availability": {
+    "heal_calibre_links": {
         "default_interval": 24 * 60 * 60,  # 24 hours
-        "description": "Mark ebook requests available once they appear in the Calibre library",
+        "description": "Repair stale Calibre links and reopen requests whose link no longer resolves",
         "type": "PROCESS",
     },
     "import_calibre_books": {
@@ -345,14 +345,14 @@ def _job_functions() -> Dict[str, Callable]:
     """Map job names to their async functions (lazy import to avoid a cycle)."""
     from app.tasks import (
         refresh_seed_data,
-        check_processing_requests,
+        sync_book_availability,
         sync_from_booklore,
         import_audiobookshelf_books,
         sync_audiobook_metadata,
         sync_download_states,
         sync_hardcover_lists,
         send_availability_emails,
-        sync_ebook_availability,
+        heal_calibre_links,
         import_calibre_books,
         sync_calibre_metadata,
         refresh_nyt_bestsellers,
@@ -360,14 +360,14 @@ def _job_functions() -> Dict[str, Callable]:
 
     return {
         "refresh_seed_data": refresh_seed_data,
-        "check_processing_requests": check_processing_requests,
+        "sync_book_availability": sync_book_availability,
         "sync_from_booklore": sync_from_booklore,
         "import_audiobookshelf_books": import_audiobookshelf_books,
         "sync_audiobook_metadata": sync_audiobook_metadata,
         "sync_download_states": sync_download_states,
         "sync_hardcover_lists": sync_hardcover_lists,
         "send_availability_emails": send_availability_emails,
-        "sync_ebook_availability": sync_ebook_availability,
+        "heal_calibre_links": heal_calibre_links,
         "import_calibre_books": import_calibre_books,
         "sync_calibre_metadata": sync_calibre_metadata,
         "refresh_nyt_bestsellers": refresh_nyt_bestsellers,

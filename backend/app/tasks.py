@@ -496,51 +496,167 @@ async def _refresh_downloaded_books(db: Session, book_ids) -> None:
         await asyncio.sleep(3.0)
 
 
-async def check_processing_requests():
-    """Background task to check Booklore and update processing requests"""
+def _sync_unmatched_ebook_requests(db: Session) -> tuple[list[int], int]:
+    """Catch ebook requests a Calibre match hasn't reached yet.
+
+    ``update_processing_requests_status`` already Calibre-matches
+    ``processing`` requests one at a time; this batches *every* open ebook
+    request (pending / approved / processing / not_found) against the whole
+    library in one lookup, so books that show up there without going through
+    a Bookkeep download - manual add, side-load - are caught too, and a
+    ``processing`` request gets a second shot if its per-request match missed.
+    """
+    from sqlalchemy.orm import joinedload
+    from app.models import BookRequest
+    from app.routers.calibre import get_active_library_path
+    from app.services import calibre_service, calibre_link_service
+
+    library_path = get_active_library_path(db)
+    if not library_path:
+        return [], 0
+
+    reqs = (
+        db.query(BookRequest)
+        .options(joinedload(BookRequest.book))
+        .filter(
+            BookRequest.format == "ebook",
+            BookRequest.status.in_(["pending", "approved", "processing", "not_found"]),
+        )
+        .all()
+    )
+    reqs = [r for r in reqs if r.book]
+    if not reqs:
+        return [], 0
+
+    try:
+        matches = calibre_service.match_books(
+            library_path, [(r.book.title, r.book.author, r.book.isbn) for r in reqs]
+        )
+    except calibre_service.CalibreError as exc:
+        logger.warning("unmatched_ebook_requests_lookup_failed", error=str(exc))
+        return [], 0
+
+    now = datetime.now(timezone.utc)
+    promoted: list[int] = []
+    updated = 0
+    for req, calibre_id in zip(reqs, matches):
+        if calibre_id is None:
+            # Fuzzy match missed - trust a persisted link if the book still
+            # carries an ebook format in the library.
+            calibre_id = calibre_link_service.linked_library_book_id(
+                db, library_path, req.book_id
+            )
+        if calibre_id is None:
+            continue
+        prev = req.status
+        # A request that resolves to a library book is a strong link - but
+        # if another Book already owns that Calibre id with an equal or
+        # stronger link, this match is a false positive (e.g. two
+        # similarly-titled books colliding in the fuzzy matcher) and must
+        # not flip this request to available with nothing actually linked.
+        try:
+            link = calibre_link_service.upsert_link(
+                db,
+                calibre_book_id=calibre_id,
+                book_id=req.book_id,
+                source="download" if req.edition_id or req.book.hardcover_id else "fuzzy",
+                confidence=None,
+                confirmed=bool(req.edition_id or req.book.hardcover_id),
+                calibre_isbn=req.book.isbn,
+                calibre_title=req.book.title,
+                commit=False,
+            )
+        except Exception as exc:
+            logger.warning("calibre_link_on_request_failed", request_id=req.id, error=str(exc))
+            link = None
+        if link is None:
+            logger.info(
+                "request_calibre_match_conflict",
+                request_id=req.id,
+                book_id=req.book_id,
+                book_title=req.book.title,
+                book_author=req.book.author,
+                calibre_id=calibre_id,
+            )
+            continue
+        req.status = "available"
+        req.updated_at = now
+        req.book.ebook_available = True
+        updated += 1
+        promoted.append(req.book_id)
+        logger.info(
+            "request_available_from_calibre",
+            request_id=req.id,
+            book_id=req.book_id,
+            book_title=req.book.title,
+            book_author=req.book.author,
+            calibre_id=calibre_id,
+            previous_status=prev,
+        )
+    if updated:
+        db.commit()
+        logger.info("unmatched_ebook_requests_complete", updated=updated, checked=len(reqs))
+    return promoted, updated
+
+
+async def sync_book_availability():
+    """Keep request status in sync with actual download/library state.
+
+    Runs frequently (default every 5 minutes):
+    1. Promotes completed ebook downloads that Calibre has now indexed
+       (``reconcile_ebook_library_imports``).
+    2. Updates ``processing`` requests: Calibre match for ebooks, else
+       DownloadTask state (still active / just imported / stalled long
+       enough to mark ``not_found``) - covers both ebook and audiobook.
+    3. Sweeps every other open ebook request (pending / approved / not_found)
+       against the whole Calibre library, so books that appear there without
+       going through a Bookkeep download are caught too.
+
+    Whole-library link maintenance (``sync_availability_flags`` /
+    ``reopen_stale_available_requests``) lives in ``heal_calibre_links``
+    instead - that's slower upkeep, not something this cadence needs to do.
+    """
     from app.routers.requests import update_processing_requests_status
+
     db: Session = SessionLocal()
     try:
-        # Belt-and-suspenders: sync_ebook_availability also does this every
-        # minute, but keep a slower fallback in case that job is disabled.
         promoted: list[int] = []
         try:
             promoted = reconcile_ebook_library_imports(db)
         except Exception as e:
             logger.error("reconcile_ebook_library_imports_error", error=str(e))
             db.rollback()
-        await _refresh_downloaded_books(db, promoted)
+
         await update_processing_requests_status(db)
+
+        more_promoted, updated = _sync_unmatched_ebook_requests(db)
+        promoted.extend(more_promoted)
+
+        await _refresh_downloaded_books(db, promoted)
+
+        if updated:
+            # A newly-matched request may have changed what a book page shows
+            # (status, "cancel my request" button) - drop the cache now
+            # rather than waiting on its TTL.
+            from app.cache import clear_cache_pattern
+            await clear_cache_pattern("requests_by_hardcover:*")
+            await clear_cache_pattern("requests_by_hardcover_batch:*")
+
         await send_availability_emails()
     except Exception as e:
-        logger.error("check_processing_requests_error", error=str(e))
+        logger.error("sync_book_availability_error", error=str(e))
     finally:
         db.close()
 
 
-async def sync_ebook_availability():
-    """Daily: treat the Calibre library as the source of truth for ebooks.
+async def heal_calibre_links():
+    """Daily: repair Calibre links across the whole library.
 
-    1. Promotes completed ebook downloads that Calibre has now indexed (a
-       fallback - ``check_processing_requests`` does this every 5 minutes
-       independently, so downloads don't wait on this job's cadence).
-    2. Flips any not-yet-available ebook request (pending / approved / processing
-       / not_found) to 'available' once its book is in the library - however it
-       got there (download, manual add, side-load).
-    3. Reopens any request stuck on "available" whose book no longer resolves
-       in the library, and keeps ``ebook_available`` flags in sync.
-    The whole library is loaded once and every request matched against it.
-
-    Link healing (``heal_stale_links`` / ``backfill_fuzzy_links``) and the
-    Hardcover/Open Library metadata backfill are NOT done here - both already
-    run once a day (and on startup) as part of ``sync_calibre_metadata``, with
-    a much larger, better-paced batch. Duplicating them here just doubles the
-    upstream API calls for no benefit.
+    Split out from ``sync_book_availability`` because this is whole-library
+    maintenance, not something that benefits from a 5-minute cadence.
     """
-    from sqlalchemy.orm import joinedload
-    from app.models import BookRequest
     from app.routers.calibre import get_active_library_path
-    from app.services import calibre_service, calibre_link_service
+    from app.services import calibre_link_service
 
     db: Session = SessionLocal()
     try:
@@ -548,127 +664,24 @@ async def sync_ebook_availability():
         if not library_path:
             return
 
-        promoted: list[int] = []
-        try:
-            promoted = reconcile_ebook_library_imports(db, library_path=library_path)
-        except Exception as e:
-            logger.error("reconcile_ebook_library_imports_error", error=str(e))
-            db.rollback()
-
-        try:
-            calibre_link_service.sync_availability_flags(db, library_path)
-            # Catches requests left stuck on "available" from before a link
-            # went stale, or that never had a link at all - heal_stale_links
-            # only fires at the moment a link breaks, so this is what covers
-            # everything already orphaned.
-            reopened = calibre_link_service.reopen_stale_available_requests(
-                db, library_path
-            )
-            if reopened:
-                # A reopened request may have reset a Book's ebook_available
-                # flag - drop the cached request-status views so book pages
-                # stop showing it as available right away instead of waiting
-                # on the TTL.
-                from app.cache import clear_cache_pattern
-                await clear_cache_pattern("requests_by_hardcover:*")
-                await clear_cache_pattern("requests_by_hardcover_batch:*")
-        except Exception as e:
-            logger.error("calibre_link_maintenance_error", error=str(e))
-            db.rollback()
-
-        reqs = (
-            db.query(BookRequest)
-            .options(joinedload(BookRequest.book))
-            .filter(
-                BookRequest.format == "ebook",
-                BookRequest.status.in_(["pending", "approved", "processing", "not_found"]),
-            )
-            .all()
+        calibre_link_service.sync_availability_flags(db, library_path)
+        # Catches requests left stuck on "available" from before a link
+        # went stale, or that never had a link at all - heal_stale_links
+        # only fires at the moment a link breaks, so this is what covers
+        # everything already orphaned.
+        reopened = calibre_link_service.reopen_stale_available_requests(
+            db, library_path
         )
-        reqs = [r for r in reqs if r.book]
-
-        matches = []
-        if reqs:
-            try:
-                matches = calibre_service.match_books(
-                    library_path, [(r.book.title, r.book.author, r.book.isbn) for r in reqs]
-                )
-            except calibre_service.CalibreError as exc:
-                logger.warning("sync_ebook_availability_lookup_failed", error=str(exc))
-
-        now = datetime.now(timezone.utc)
-        updated = 0
-        for req, calibre_id in zip(reqs, matches):
-            if calibre_id is None:
-                # Fuzzy match missed - trust a persisted link if the book still
-                # carries an ebook format in the library.
-                calibre_id = calibre_link_service.linked_library_book_id(
-                    db, library_path, req.book_id
-                )
-            if calibre_id is None:
-                continue
-            prev = req.status
-            # A request that resolves to a library book is a strong link - but
-            # if another Book already owns that Calibre id with an equal or
-            # stronger link, this match is a false positive (e.g. two
-            # similarly-titled books colliding in the fuzzy matcher) and must
-            # not flip this request to available with nothing actually linked.
-            try:
-                link = calibre_link_service.upsert_link(
-                    db,
-                    calibre_book_id=calibre_id,
-                    book_id=req.book_id,
-                    source="download" if req.edition_id or req.book.hardcover_id else "fuzzy",
-                    confidence=None,
-                    confirmed=bool(req.edition_id or req.book.hardcover_id),
-                    calibre_isbn=req.book.isbn,
-                    calibre_title=req.book.title,
-                    commit=False,
-                )
-            except Exception as exc:
-                logger.warning("calibre_link_on_request_failed", request_id=req.id, error=str(exc))
-                link = None
-            if link is None:
-                logger.info(
-                    "request_calibre_match_conflict",
-                    request_id=req.id,
-                    book_id=req.book_id,
-                    book_title=req.book.title,
-                    book_author=req.book.author,
-                    calibre_id=calibre_id,
-                )
-                continue
-            req.status = "available"
-            req.updated_at = now
-            req.book.ebook_available = True
-            updated += 1
-            promoted.append(req.book_id)
-            logger.info(
-                "request_available_from_calibre",
-                request_id=req.id,
-                book_id=req.book_id,
-                book_title=req.book.title,
-                book_author=req.book.author,
-                calibre_id=calibre_id,
-                previous_status=prev,
-            )
-        if updated:
-            db.commit()
-            logger.info("sync_ebook_availability_complete", updated=updated, checked=len(reqs))
-
-        await _refresh_downloaded_books(db, promoted)
-
-        # An ebook that just landed in the library may have a waiting request —
-        # email it now, and drop the request cache so the book page stops showing
-        # the stale status (and "cancel my request" button), rather than waiting
-        # for the next periodic run / the 5 min cache TTL.
-        if updated or promoted:
+        if reopened:
+            # A reopened request may have reset a Book's ebook_available
+            # flag - drop the cached request-status views so book pages
+            # stop showing it as available right away instead of waiting
+            # on the TTL.
             from app.cache import clear_cache_pattern
             await clear_cache_pattern("requests_by_hardcover:*")
             await clear_cache_pattern("requests_by_hardcover_batch:*")
-            await send_availability_emails()
     except Exception as e:
-        logger.error("sync_ebook_availability_error", error=str(e))
+        logger.error("heal_calibre_links_error", error=str(e))
         db.rollback()
     finally:
         db.close()
@@ -1700,17 +1713,17 @@ async def sync_from_booklore():
 
 async def run_background_request_check():
     """Background task to check processing requests periodically"""
-    job_name = "check_processing_requests"
-    
+    job_name = "sync_book_availability"
+
     # Wait until next scheduled execution before first run
     initial_wait = get_seconds_until_next_execution(job_name)
     if initial_wait > 0:
         logger.info("background_request_check_waiting", seconds=initial_wait)
         await asyncio.sleep(initial_wait)
-    
+
     while True:
         try:
-            await check_processing_requests()
+            await sync_book_availability()
             update_job_execution(job_name)
         except Exception as e:
             logger.error("background_request_check_error", error=str(e))
@@ -2038,7 +2051,7 @@ def get_job_interval(job_name: str, db: Session) -> int:
     
     defaults = {
         "refresh_seed_data": 24 * 60 * 60,
-        "check_processing_requests": 5 * 60,
+        "sync_book_availability": 5 * 60,
         "sync_from_booklore": 24 * 60 * 60,
         "import_audiobookshelf_books": 24 * 60 * 60,
         "sync_audiobook_metadata": 6 * 60 * 60,
