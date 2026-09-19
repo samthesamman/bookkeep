@@ -176,11 +176,18 @@ def book_identities(
         ):
             authors_by_book.setdefault(int(r["book_id"]), []).append(r["name"])
 
+        # A book can carry both an isbn10 and isbn13 identifier; prefer isbn13
+        # explicitly (matching how Book.isbn is stored elsewhere - see
+        # hardcover_metadata.py / openlibrary_metadata.py) rather than letting
+        # sqlite's unordered row order arbitrarily pick one. _isbn_key never
+        # converts between ISBN-10/13, so picking the wrong one here silently
+        # breaks an otherwise-exact match against an existing Book row.
         isbn_by_book: dict[int, str] = {}
         for r in conn.execute(
             f"""
             SELECT book, val FROM identifiers
              WHERE type IN ('isbn','isbn13','isbn10') {isbn_filter}
+             ORDER BY CASE type WHEN 'isbn13' THEN 0 WHEN 'isbn' THEN 1 ELSE 2 END
             """,
             params,
         ):
