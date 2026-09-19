@@ -33,7 +33,7 @@ JOB_DEFINITIONS = {
         "description": "Import books from Booklore library",
         "type": "PROCESS",
     },
-    "sync_from_audiobookshelf": {
+    "import_audiobookshelf_books": {
         "default_interval": 24 * 60 * 60,  # 24 hours
         "description": "Import audiobooks from Audiobookshelf library",
         "type": "PROCESS",
@@ -347,7 +347,7 @@ def _job_functions() -> Dict[str, Callable]:
         refresh_seed_data,
         check_processing_requests,
         sync_from_booklore,
-        sync_from_audiobookshelf,
+        import_audiobookshelf_books,
         sync_audiobook_metadata,
         sync_download_states,
         sync_hardcover_lists,
@@ -362,7 +362,7 @@ def _job_functions() -> Dict[str, Callable]:
         "refresh_seed_data": refresh_seed_data,
         "check_processing_requests": check_processing_requests,
         "sync_from_booklore": sync_from_booklore,
-        "sync_from_audiobookshelf": sync_from_audiobookshelf,
+        "import_audiobookshelf_books": import_audiobookshelf_books,
         "sync_audiobook_metadata": sync_audiobook_metadata,
         "sync_download_states": sync_download_states,
         "sync_hardcover_lists": sync_hardcover_lists,

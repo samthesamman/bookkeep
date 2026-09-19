@@ -259,7 +259,7 @@ async def link_and_match_new_audiobook(
     The match runs entirely on the Audiobookshelf server against its own metadata
     provider — we send no book metadata, so nothing here can affect our records.
     Polls the ``addedAt``-sorted, minified item list and stops once a poll turns
-    up nothing new. ``sync_from_audiobookshelf`` is the backstop.
+    up nothing new. ``import_audiobookshelf_books`` is the backstop.
     """
     from app.database import SessionLocal
 

@@ -1744,7 +1744,7 @@ async def run_background_booklore_sync():
         await asyncio.sleep(interval)
 
 
-async def sync_from_audiobookshelf():
+async def import_audiobookshelf_books():
     """
     Sync audiobook availability from Audiobookshelf.
     - Imports audiobooks from Audiobookshelf into the local database
@@ -1764,18 +1764,18 @@ async def sync_from_audiobookshelf():
         abs_server = get_default_audiobookshelf_server(db)
 
         if not abs_server:
-            logger.info("sync_from_audiobookshelf_skipped", reason="no_audiobookshelf_server")
+            logger.info("import_audiobookshelf_books_skipped", reason="no_audiobookshelf_server")
             return
 
-        logger.info("sync_from_audiobookshelf_starting", server_name=abs_server.name)
+        logger.info("import_audiobookshelf_books_starting", server_name=abs_server.name)
 
         items = await get_all_audiobookshelf_items(abs_server)
 
         if not items:
-            logger.info("sync_from_audiobookshelf_skipped", reason="no_items_in_audiobookshelf")
+            logger.info("import_audiobookshelf_books_skipped", reason="no_items_in_audiobookshelf")
             return
 
-        logger.info("sync_from_audiobookshelf_fetched", count=len(items))
+        logger.info("import_audiobookshelf_books_fetched", count=len(items))
 
         updated_count = 0
         skipped_count = 0
@@ -1995,7 +1995,7 @@ async def sync_from_audiobookshelf():
             await clear_cache_pattern("requests_by_hardcover:*")
             await clear_cache_pattern("requests_by_hardcover_batch:*")
 
-        logger.info("sync_from_audiobookshelf_complete",
+        logger.info("import_audiobookshelf_books_complete",
                    audiobookshelf_items=len(items),
                    books_created=books_created,
                    books_updated=books_updated,
@@ -2003,7 +2003,7 @@ async def sync_from_audiobookshelf():
                    skipped=skipped_count)
 
     except Exception as e:
-        logger.error("sync_from_audiobookshelf_error", error=str(e))
+        logger.error("import_audiobookshelf_books_error", error=str(e))
         db.rollback()
     finally:
         db.close()
@@ -2040,7 +2040,7 @@ def get_job_interval(job_name: str, db: Session) -> int:
         "refresh_seed_data": 24 * 60 * 60,
         "check_processing_requests": 5 * 60,
         "sync_from_booklore": 24 * 60 * 60,
-        "sync_from_audiobookshelf": 24 * 60 * 60,
+        "import_audiobookshelf_books": 24 * 60 * 60,
         "sync_audiobook_metadata": 6 * 60 * 60,
     }
     
