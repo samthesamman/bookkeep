@@ -404,7 +404,44 @@ export const booksApi = {
       `/api/books/${id}/availability/${formatType}`,
       { method: 'DELETE' }
     ),
+
+  getMissingMetadata: (page = 1, pageSize = 50) =>
+    apiRequest<MissingMetadataResponse>(
+      `/api/books/missing-metadata?page=${page}&page_size=${pageSize}`,
+    ),
+
+  retryMetadataSync: (id: number) =>
+    apiRequest<RetryMetadataResponse>(`/api/books/${id}/retry-metadata-sync`, {
+      method: 'POST',
+    }),
+
+  linkHardcover: (id: number, hardcoverId: number) =>
+    apiRequest<any>(`/api/books/${id}/link-hardcover`, {
+      method: 'POST',
+      body: JSON.stringify({ hardcover_id: hardcoverId }),
+    }),
 };
+
+export interface MissingMetadataBook {
+  book_id: number;
+  title: string;
+  author: string | null;
+  isbn: string | null;
+  cover_url: string | null;
+  hardcover_id: number | null;
+  calibre_linked: boolean;
+  last_attempted_at: string | null;
+}
+
+export interface MissingMetadataResponse {
+  books: MissingMetadataBook[];
+  total: number;
+}
+
+export interface RetryMetadataResponse {
+  found: boolean;
+  book: any;
+}
 
 // Requests API endpoints
 export const requestsApi = {

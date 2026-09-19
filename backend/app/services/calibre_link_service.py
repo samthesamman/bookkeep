@@ -246,12 +246,17 @@ def books_missing_metadata(
     Selects a link when its Book has never been refreshed, or was refreshed more
     than ``stale_days`` ago and still has a gap in description / cover / genres.
     Never-refreshed rows come first so repeated capped runs make progress.
+
+    Excludes books whose last attempt confirmed nothing was found
+    (``metadata_sync_exhausted_at`` set) - re-attempting those every
+    ``stale_days`` forever is pointless; see MetadataEnrichmentError.
     """
     stale_before = datetime.now(timezone.utc) - timedelta(days=stale_days)
     q = (
         db.query(CalibreBookLink)
         .join(Book, Book.id == CalibreBookLink.book_id)
         .filter(
+            Book.metadata_sync_exhausted_at.is_(None),
             (Book.last_refreshed.is_(None))
             | (
                 (Book.last_refreshed < stale_before)
@@ -260,7 +265,7 @@ def books_missing_metadata(
                     | Book.cover_url.is_(None)
                     | Book.genres.is_(None)
                 )
-            )
+            ),
         )
         .order_by(Book.last_refreshed.asc())
     )

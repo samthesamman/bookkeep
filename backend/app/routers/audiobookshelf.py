@@ -833,9 +833,15 @@ async def resolve_library_item(
         book = _match_local_book(entry, db)
 
         if not book:
-            hardcover_data = await lookup_book_by_title_author(
-                entry["title"], entry.get("author"), db
-            )
+            try:
+                hardcover_data = await lookup_book_by_title_author(
+                    entry["title"], entry.get("author"), db
+                )
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail="Hardcover search failed - try again",
+                ) from exc
             if not hardcover_data:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,

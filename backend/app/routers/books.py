@@ -1,4 +1,6 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from typing import Optional
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from datetime import datetime, timezone
@@ -179,6 +181,186 @@ def get_book_by_hardcover(hardcover_id: int, db: Session = Depends(database.get_
     response_dict = {
         **{k: v for k, v in db_book.__dict__.items() if not k.startswith("_")},
         "genres": [g.strip() for g in db_book.genres.split(",")] if db_book.genres else [],
+    }
+    return schemas.BookResponse(**response_dict)
+
+
+class MissingMetadataBook(BaseModel):
+    book_id: int
+    title: str
+    author: Optional[str] = None
+    isbn: Optional[str] = None
+    cover_url: Optional[str] = None
+    hardcover_id: Optional[int] = None
+    calibre_linked: bool
+    last_attempted_at: Optional[datetime] = None
+
+
+class MissingMetadataResponse(BaseModel):
+    books: list[MissingMetadataBook]
+    total: int
+
+
+# Registered before /{book_id} - "missing-metadata" would otherwise match that
+# route's {book_id}: int path param and 422 on the literal string before ever
+# reaching this one (same issue noted on calibre.py's missing-hardcover-id).
+@router.get("/missing-metadata", response_model=MissingMetadataResponse)
+async def list_books_missing_metadata(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+    db: Session = Depends(database.get_db),
+    _: models.User = Depends(require_admin),
+) -> MissingMetadataResponse:
+    """Books the scheduled metadata syncs searched every source for and gave up on.
+
+    Fed by ``metadata_sync_exhausted_at``, set by ``sync_calibre_metadata`` /
+    ``sync_audiobook_metadata`` (app/tasks.py) when a clean search - every
+    source responded, none raised - still found nothing new. Those two jobs
+    skip a book while this is set, so it won't be re-searched every run;
+    retry or manually link it from here instead.
+    """
+    from app.models import CalibreBookLink
+
+    q = (
+        db.query(models.Book)
+        .filter(models.Book.metadata_sync_exhausted_at.isnot(None))
+        .order_by(models.Book.metadata_sync_exhausted_at.desc())
+    )
+    total = q.count()
+    rows = q.offset((page - 1) * page_size).limit(page_size).all()
+    linked_ids = {
+        r[0]
+        for r in db.query(CalibreBookLink.book_id)
+        .filter(CalibreBookLink.book_id.in_([b.id for b in rows]))
+        .all()
+    }
+    books = [
+        MissingMetadataBook(
+            book_id=b.id,
+            title=b.title,
+            author=b.author,
+            isbn=b.isbn,
+            cover_url=b.cover_url,
+            hardcover_id=b.hardcover_id,
+            calibre_linked=b.id in linked_ids,
+            last_attempted_at=b.metadata_sync_exhausted_at,
+        )
+        for b in rows
+    ]
+    return MissingMetadataResponse(books=books, total=total)
+
+
+class RetryMetadataResponse(BaseModel):
+    found: bool
+    book: schemas.BookResponse
+
+
+@router.post("/{book_id}/retry-metadata-sync", response_model=RetryMetadataResponse)
+async def retry_book_metadata_sync(
+    book_id: int,
+    db: Session = Depends(database.get_db),
+    _: models.User = Depends(require_admin),
+) -> RetryMetadataResponse:
+    """Re-run metadata enrichment for one book right now, bypassing the
+    metadata_sync_exhausted_at cooldown. The "Retry" action on the Missing
+    Metadata admin page.
+    """
+    from app.services import book_metadata, calibre_link_service
+
+    db_book = db.query(models.Book).filter(models.Book.id == book_id).first()
+    if not db_book:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Book not found")
+
+    link = calibre_link_service.get_link_for_book(db, book_id)
+    db_book.metadata_sync_exhausted_at = None
+    try:
+        found = await book_metadata.enrich_book(
+            db,
+            db_book,
+            resolve_hardcover=True,
+            calibre_book_id=link.calibre_book_id if link else None,
+        )
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Metadata sync failed: {exc}"
+        )
+
+    if found or db_book.last_refreshed is None:
+        db_book.last_refreshed = datetime.now(timezone.utc)
+    if not found:
+        # Confirmed again, right now, that there's nothing new - stay exhausted.
+        db_book.metadata_sync_exhausted_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(db_book)
+
+    response_dict = {
+        **{k: v for k, v in db_book.__dict__.items() if not k.startswith('_')},
+        "genres": [g.strip() for g in db_book.genres.split(',')] if db_book.genres else []
+    }
+    return RetryMetadataResponse(found=found, book=schemas.BookResponse(**response_dict))
+
+
+class LinkHardcoverRequest(BaseModel):
+    hardcover_id: int
+
+
+@router.post("/{book_id}/link-hardcover", response_model=schemas.BookResponse)
+async def link_book_to_hardcover(
+    book_id: int,
+    payload: LinkHardcoverRequest,
+    db: Session = Depends(database.get_db),
+    _: models.User = Depends(require_admin),
+) -> schemas.BookResponse:
+    """Point a book at a specific Hardcover book id and pull in its metadata.
+
+    The manual "search Hardcover and link it" action on the Missing Metadata
+    admin page, for a book the automated search couldn't match on its own.
+    Locks the metadata so a later automated refresh doesn't override the
+    admin's choice.
+    """
+    from app.services import book_metadata, calibre_link_service
+
+    db_book = db.query(models.Book).filter(models.Book.id == book_id).first()
+    if not db_book:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Book not found")
+
+    clash = (
+        db.query(models.Book)
+        .filter(models.Book.hardcover_id == payload.hardcover_id, models.Book.id != book_id)
+        .first()
+    )
+    if clash:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f'That Hardcover book is already linked to "{clash.title}"',
+        )
+
+    link = calibre_link_service.get_link_for_book(db, book_id)
+    db_book.hardcover_id = payload.hardcover_id
+    db_book.metadata_sync_exhausted_at = None
+    try:
+        await book_metadata.enrich_book(
+            db,
+            db_book,
+            overwrite=True,
+            calibre_book_id=link.calibre_book_id if link else None,
+        )
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Failed to fetch Hardcover metadata: {exc}",
+        )
+
+    db_book.metadata_locked = True
+    db_book.last_refreshed = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(db_book)
+
+    response_dict = {
+        **{k: v for k, v in db_book.__dict__.items() if not k.startswith('_')},
+        "genres": [g.strip() for g in db_book.genres.split(',')] if db_book.genres else []
     }
     return schemas.BookResponse(**response_dict)
 

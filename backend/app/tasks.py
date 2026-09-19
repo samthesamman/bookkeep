@@ -759,12 +759,21 @@ async def _enrich_calibre_metadata(db: Session, *, limit: int) -> int:
         try:
             ok = await book_metadata.enrich_book(db, book, calibre_book_id=link.calibre_book_id)
         except Exception as exc:
+            # Includes MetadataEnrichmentError (a source couldn't be checked
+            # cleanly) - leave metadata_sync_exhausted_at alone so this book is
+            # reconsidered next run instead of being marked a confirmed no-match.
             logger.warning("calibre_book_enrich_failed", book_id=book.id, error=str(exc))
             db.rollback()
             continue
         # Stamp last_refreshed even on a no-op so we do not retry it every run.
         if book.last_refreshed is None:
             book.last_refreshed = datetime.now(timezone.utc)
+        if ok:
+            book.metadata_sync_exhausted_at = None
+        else:
+            # Every source responded cleanly and had nothing new - stop
+            # resurfacing this book until an admin retries or relinks it.
+            book.metadata_sync_exhausted_at = datetime.now(timezone.utc)
         try:
             db.commit()
             if ok:
@@ -1668,22 +1677,27 @@ async def sync_audiobook_metadata():
         # here avoids the two jobs re-fetching the same books from Hardcover.
         linked_ids = db.query(CalibreBookLink.book_id)
 
+        # metadata_sync_exhausted_at excludes books a previous run already
+        # confirmed have nothing more to find - see MetadataEnrichmentError.
         books_with_slug_no_id = db.query(Book).filter(
             Book.hardcover_slug.isnot(None),
             Book.hardcover_id.is_(None),
             Book.id.notin_(linked_ids),
+            Book.metadata_sync_exhausted_at.is_(None),
         ).limit(50).all()
 
         books_without_cover = db.query(Book).filter(
             Book.cover_url.is_(None),
             Book.hardcover_id.is_(None),
             Book.id.notin_(linked_ids),
+            Book.metadata_sync_exhausted_at.is_(None),
         ).limit(50).all()  # Limit to avoid too many API calls
 
         books_without_rating = db.query(Book).filter(
             Book.rating.is_(None),
             Book.hardcover_id.isnot(None),
             Book.id.notin_(linked_ids),
+            Book.metadata_sync_exhausted_at.is_(None),
         ).limit(50).all()
 
         books_without_series_id = db.query(Book).filter(
@@ -1691,6 +1705,7 @@ async def sync_audiobook_metadata():
             Book.series_id.is_(None),
             or_(Book.series.isnot(None), Book.series_position.isnot(None)),
             Book.id.notin_(linked_ids),
+            Book.metadata_sync_exhausted_at.is_(None),
         ).limit(50).all()
 
         # Combine and dedupe
@@ -1722,6 +1737,9 @@ async def sync_audiobook_metadata():
             try:
                 changed = await book_metadata.enrich_book(db, book, resolve_hardcover=True)
             except Exception as e:
+                # Includes MetadataEnrichmentError (a source couldn't be checked
+                # cleanly) - leave metadata_sync_exhausted_at alone so this book
+                # is reconsidered next run instead of being marked exhausted.
                 logger.warning(
                     "sync_audiobook_metadata_book_error", book_id=book_id, title=book.title, error=str(e)
                 )
@@ -1732,6 +1750,12 @@ async def sync_audiobook_metadata():
 
             if book.last_refreshed is None:
                 book.last_refreshed = datetime.now(timezone.utc)
+            if changed:
+                book.metadata_sync_exhausted_at = None
+            else:
+                # Every source responded cleanly and had nothing new - stop
+                # resurfacing this book until an admin retries or relinks it.
+                book.metadata_sync_exhausted_at = datetime.now(timezone.utc)
             try:
                 db.commit()
                 if changed:

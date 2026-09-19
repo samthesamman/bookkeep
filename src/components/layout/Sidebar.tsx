@@ -1,5 +1,5 @@
 import { NavLink, useLocation, Link } from 'react-router-dom';
-import { Compass, Clock, Settings, Users, Shield, BookOpen, Sparkles, Library, Headphones, Link2 } from 'lucide-react';
+import { Compass, Clock, Settings, Users, Shield, BookOpen, Sparkles, Library, Headphones, Link2, SearchX } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useUser } from '@/contexts/UserContext';
 import { useQuery } from '@tanstack/react-query';
@@ -18,6 +18,7 @@ const adminItems = [
   { to: '/admin', icon: Shield, label: 'Admin' },
   { to: '/admin/users', icon: Users, label: 'Users' },
   { to: '/admin/missing-hardcover', icon: Link2, label: 'Missing Hardcover' },
+  { to: '/admin/missing-metadata', icon: SearchX, label: 'Missing Metadata' },
   { to: '/settings', icon: Settings, label: 'Settings' },
 ];
 

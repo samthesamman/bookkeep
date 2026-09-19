@@ -789,7 +789,9 @@ _HC_LOOKUP_BOOK_FIELDS = """
 async def lookup_book_by_slug(slug: str, db: Session = None) -> Optional[dict]:
     """
     Look up a book on Hardcover by its slug and return full book data.
-    Returns None if not found.
+    Returns None if genuinely not found; raises if the lookup couldn't be
+    completed (rate limited, network error) - see lookup_book_by_title_author's
+    docstring for why that distinction matters to callers.
     """
     query = (
         "query GetBookBySlug($slug: String!) {\n"
@@ -800,23 +802,23 @@ async def lookup_book_by_slug(slug: str, db: Session = None) -> Optional[dict]:
 
     try:
         result = await execute_graphql(query, {"slug": slug}, db)
-        books = result.get("books", [])
-        if books:
-            book = books[0]
-            logger.info("hardcover_book_found_by_slug", slug=slug, hardcover_id=book.get("id"))
-            return book
-        else:
-            logger.warning("hardcover_book_not_found_by_slug", slug=slug)
-            return None
     except Exception as e:
         logger.error("hardcover_lookup_by_slug_error", slug=slug, error=str(e))
-        return None
+        raise
+    books = result.get("books", [])
+    if books:
+        book = books[0]
+        logger.info("hardcover_book_found_by_slug", slug=slug, hardcover_id=book.get("id"))
+        return book
+    logger.warning("hardcover_book_not_found_by_slug", slug=slug)
+    return None
 
 
 async def lookup_book_by_id(book_id: int, db: Session = None) -> Optional[dict]:
     """Look up a book on Hardcover by its numeric id and return full book data.
 
-    Same payload shape as :func:`lookup_book_by_slug`. Returns None if not found.
+    Same payload shape and same "None means genuinely not found, raises on a
+    failed lookup" contract as :func:`lookup_book_by_slug`.
     """
     query = (
         "query GetBookById($id: Int!) {\n"
@@ -827,20 +829,25 @@ async def lookup_book_by_id(book_id: int, db: Session = None) -> Optional[dict]:
 
     try:
         result = await execute_graphql(query, {"id": int(book_id)}, db)
-        books = result.get("books", [])
-        if books:
-            return books[0]
-        logger.warning("hardcover_book_not_found_by_id", hardcover_id=book_id)
-        return None
     except Exception as e:
         logger.error("hardcover_lookup_by_id_error", hardcover_id=book_id, error=str(e))
-        return None
+        raise
+    books = result.get("books", [])
+    if books:
+        return books[0]
+    logger.warning("hardcover_book_not_found_by_id", hardcover_id=book_id)
+    return None
 
 
 async def lookup_book_by_title_author(title: str, author: str = None, db: Session = None) -> Optional[dict]:
     """
     Search for a book on Hardcover by title and optionally author.
-    Returns the best match or None if not found.
+    Returns the best match, or None if the search genuinely found nothing.
+
+    Raises if the search itself couldn't be completed (rate limited, network
+    error, GraphQL error) - callers that want to distinguish "confirmed no
+    match" from "couldn't check" (e.g. to decide whether to stop retrying a
+    book) rely on that distinction, so this does not swallow those into None.
     """
     # Placeholder author strings (from Calibre / Audiobookshelf rows with no real
     # author) only pollute the search and can't be matched against — drop them.
@@ -862,69 +869,74 @@ async def lookup_book_by_title_author(title: str, author: str = None, db: Sessio
 
     try:
         result = await execute_graphql(query, {"query": search_query}, db)
-        search_response = result.get("search", {})
-        results_obj = search_response.get("results", {}) if isinstance(search_response, dict) else {}
-        hits = results_obj.get("hits", []) if isinstance(results_obj, dict) else []
-
-        def _doc_authors(doc: dict) -> str:
-            names = list(doc.get("author_names") or [])
-            for contrib in doc.get("contributions") or []:
-                if isinstance(contrib, dict):
-                    name = (contrib.get("author") or {}).get("name")
-                else:
-                    name = contrib
-                if name:
-                    names.append(str(name))
-            return ", ".join(names)
-
-        # Rank the top hits: a hit whose title *and* author line up wins outright;
-        # otherwise fall back to the best title-only match (Hardcover returns
-        # results in relevance order, so the first such hit is the safest guess).
-        # A hit whose title doesn't match at all is never accepted — that's what
-        # produced "Summary of X" / wrong-book matches.
-        matched_id = None
-        title_only_id = None
-        for hit in hits[:10]:
-            doc = hit.get("document", {})
-            if not doc or not doc.get("id"):
-                continue
-
-            got_title = doc.get("title") or ""
-            if is_derivative_title(title, got_title):
-                logger.info("hardcover_search_skip_derivative",
-                            search=search_query, candidate=got_title)
-                continue
-            if not titles_match(title, got_title):
-                continue
-
-            book_id = int(doc["id"])
-            if not author or authors_match(author, _doc_authors(doc)):
-                matched_id = book_id
-                logger.info("hardcover_search_match_found",
-                            search=search_query, matched_id=book_id,
-                            matched_title=got_title)
-                break
-            if title_only_id is None:
-                title_only_id = book_id
-
-        matched_id = matched_id or title_only_id
-        if matched_id is None:
-            logger.warning("hardcover_search_no_match",
-                           search=search_query, author=author)
-            return None
-
-        # Fetch full book details using the ID
-        full_query = (
-            "query GetBook($id: Int!) {\n"
-            "  books_by_pk(id: $id) {"
-            + _HC_LOOKUP_BOOK_FIELDS
-            + "  }\n}"
-        )
-        full_result = await execute_graphql(full_query, {"id": matched_id}, db)
-        return full_result.get("books_by_pk")
     except Exception as e:
         logger.error("hardcover_search_error", search=search_query, error=str(e))
+        raise
+
+    search_response = result.get("search", {})
+    results_obj = search_response.get("results", {}) if isinstance(search_response, dict) else {}
+    hits = results_obj.get("hits", []) if isinstance(results_obj, dict) else []
+
+    def _doc_authors(doc: dict) -> str:
+        names = list(doc.get("author_names") or [])
+        for contrib in doc.get("contributions") or []:
+            if isinstance(contrib, dict):
+                name = (contrib.get("author") or {}).get("name")
+            else:
+                name = contrib
+            if name:
+                names.append(str(name))
+        return ", ".join(names)
+
+    # Rank the top hits: a hit whose title *and* author line up wins outright;
+    # otherwise fall back to the best title-only match (Hardcover returns
+    # results in relevance order, so the first such hit is the safest guess).
+    # A hit whose title doesn't match at all is never accepted — that's what
+    # produced "Summary of X" / wrong-book matches.
+    matched_id = None
+    title_only_id = None
+    for hit in hits[:10]:
+        doc = hit.get("document", {})
+        if not doc or not doc.get("id"):
+            continue
+
+        got_title = doc.get("title") or ""
+        if is_derivative_title(title, got_title):
+            logger.info("hardcover_search_skip_derivative",
+                        search=search_query, candidate=got_title)
+            continue
+        if not titles_match(title, got_title):
+            continue
+
+        book_id = int(doc["id"])
+        if not author or authors_match(author, _doc_authors(doc)):
+            matched_id = book_id
+            logger.info("hardcover_search_match_found",
+                        search=search_query, matched_id=book_id,
+                        matched_title=got_title)
+            break
+        if title_only_id is None:
+            title_only_id = book_id
+
+    matched_id = matched_id or title_only_id
+    if matched_id is None:
+        logger.warning("hardcover_search_no_match",
+                       search=search_query, author=author)
         return None
+
+    # Fetch full book details using the ID
+    full_query = (
+        "query GetBook($id: Int!) {\n"
+        "  books_by_pk(id: $id) {"
+        + _HC_LOOKUP_BOOK_FIELDS
+        + "  }\n}"
+    )
+    try:
+        full_result = await execute_graphql(full_query, {"id": matched_id}, db)
+    except Exception as e:
+        logger.error("hardcover_search_error", search=search_query, error=str(e))
+        raise
+    return full_result.get("books_by_pk")
 
 
 @router.get("/search", response_model=schemas.HardcoverBooksResponse)
@@ -1518,7 +1530,11 @@ async def refresh_local_book(
     an existing slug-only row so ``_save_book_to_db`` does not duplicate it.
     """
     if hardcover_id is None and slug:
-        data = await lookup_book_by_slug(slug, db)
+        try:
+            data = await lookup_book_by_slug(slug, db)
+        except Exception as exc:
+            logger.warning("refresh_local_book_slug_lookup_failed", slug=slug, error=str(exc))
+            return None
         if data:
             hardcover_id = data.get("id")
     if not hardcover_id:

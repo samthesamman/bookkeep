@@ -39,6 +39,18 @@ from app.services.text_match import titles_match
 logger = structlog.get_logger()
 
 
+class MetadataEnrichmentError(Exception):
+    """``enrich_book`` found nothing to change, but at least one source could not
+    be checked cleanly (rate limited, network error, etc).
+
+    Distinct from returning ``False``, which means every source that was
+    checked responded normally and simply had nothing new — callers that
+    stop retrying a book after a clean "nothing found" (see
+    ``metadata_sync_exhausted_at``) rely on this distinction so a transient
+    API failure doesn't get mistaken for a confirmed no-match.
+    """
+
+
 def _as_genre_list(value) -> list[str]:
     if isinstance(value, list):
         return [str(v).strip() for v in value if str(v).strip()]
@@ -228,6 +240,7 @@ async def enrich_book(
 
     isbn = getattr(book, "isbn", None)
     sources: dict[str, dict] = {}
+    had_error = False
 
     if use_google:
         for name, mod in (("gb", gb), ("ab", ab)):
@@ -236,6 +249,7 @@ async def enrich_book(
                     await mod.fetch(isbn=isbn, title=book.title, author=book.author) or {}
                 )
             except Exception as exc:  # best effort
+                had_error = True
                 logger.warning(
                     f"book_metadata_{name}_failed",
                     book_id=getattr(book, "id", None),
@@ -253,6 +267,7 @@ async def enrich_book(
                 await ol.fetch(isbn=isbn, title=book.title, author=book.author) or {}
             )
         except Exception as exc:
+            had_error = True
             logger.warning(
                 "book_metadata_openlibrary_failed",
                 book_id=getattr(book, "id", None),
@@ -269,6 +284,7 @@ async def enrich_book(
         try:
             payload = await _hardcover_payload(db, book, resolve=resolve_hardcover)
         except Exception as exc:
+            had_error = True
             logger.warning("book_metadata_hardcover_fetch_failed", book_id=getattr(book, "id", None), error=str(exc))
             payload = None
         if payload:
@@ -288,6 +304,13 @@ async def enrich_book(
     changed = _merge(book, sources, overwrite=overwrite) or changed
     if changed:
         await sync_to_calibre_agent(db, book, calibre_book_id=calibre_book_id)
+    elif had_error:
+        # Nothing to show for this attempt, but at least one source couldn't be
+        # checked cleanly - don't let the caller mistake this for a confirmed
+        # no-match (see MetadataEnrichmentError).
+        raise MetadataEnrichmentError(
+            f"metadata sources unavailable for book_id={getattr(book, 'id', None)}"
+        )
     return changed
 
 
