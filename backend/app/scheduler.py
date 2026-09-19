@@ -30,11 +30,6 @@ JOB_DEFINITIONS = {
         "description": "Sync Hardcover to-read/list books and auto-request them",
         "type": "PROCESS",
     },
-    "sync_audiobook_metadata": {
-        "default_interval": 6 * 60 * 60,  # 6 hours
-        "description": "Fill in missing Hardcover metadata for books not linked to Calibre (mainly audiobooks)",
-        "type": "PROCESS",
-    },
     "refresh_nyt_bestsellers": {
         "default_interval": 24 * 60 * 60,  # 24 hours
         "description": "Refresh NYT Best Sellers lists shown on the Discover page",
@@ -66,6 +61,11 @@ JOB_DEFINITIONS = {
     "import_audiobookshelf_books": {
         "default_interval": 24 * 60 * 60,  # 24 hours
         "description": "Import audiobooks from the Audiobookshelf library",
+        "type": "PROCESS",
+    },
+    "sync_audiobook_metadata": {
+        "default_interval": 6 * 60 * 60,  # 6 hours
+        "description": "Fill in missing Hardcover metadata for books not linked to Calibre (mainly audiobooks)",
         "type": "PROCESS",
     },
     # Booklore

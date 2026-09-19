@@ -31,11 +31,6 @@ DEFAULT_JOBS = {
         "type": "PROCESS",
         "description": "Sync Hardcover to-read/list books and auto-request them",
     },
-    "sync_audiobook_metadata": {
-        "interval_seconds": 6 * 60 * 60,
-        "type": "PROCESS",
-        "description": "Fill in missing Hardcover metadata for books not linked to Calibre (mainly audiobooks)",
-    },
     "refresh_nyt_bestsellers": {
         "interval_seconds": 24 * 60 * 60,
         "type": "PROCESS",
@@ -62,6 +57,11 @@ DEFAULT_JOBS = {
         "interval_seconds": 24 * 60 * 60,
         "type": "PROCESS",
         "description": "Import audiobooks from the Audiobookshelf library",
+    },
+    "sync_audiobook_metadata": {
+        "interval_seconds": 6 * 60 * 60,
+        "type": "PROCESS",
+        "description": "Fill in missing Hardcover metadata for books not linked to Calibre (mainly audiobooks)",
     },
     # Booklore
     "sync_from_booklore": {
