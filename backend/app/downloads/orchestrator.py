@@ -432,7 +432,7 @@ class DownloadOrchestrator:
                     # Audiobook imports run their own follow-up (Audiobookshelf
                     # match + email) from _import_audiobook. For an ebook that is
                     # already imported (no Calibre wait), promote + email now;
-                    # Calibre-gated ebooks are handled by reconcile_calibre_library.
+                    # Calibre-gated ebooks are handled by sync_ebook_availability.
                     if task.format == "ebook" and task.import_status == "imported":
                         self._send_availability_email(task.book_id)
 

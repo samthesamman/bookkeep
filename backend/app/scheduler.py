@@ -63,7 +63,7 @@ JOB_DEFINITIONS = {
         "description": "Email available books to users who opted in when requesting",
         "type": "PROCESS",
     },
-    "reconcile_calibre_library": {
+    "sync_ebook_availability": {
         "default_interval": 24 * 60 * 60,  # 24 hours
         "description": "Mark ebook requests available once they appear in the Calibre library",
         "type": "PROCESS",
@@ -352,7 +352,7 @@ def _job_functions() -> Dict[str, Callable]:
         sync_download_states,
         sync_hardcover_lists,
         send_availability_emails,
-        reconcile_calibre_library,
+        sync_ebook_availability,
         import_calibre_books,
         sync_calibre_metadata,
         refresh_nyt_bestsellers,
@@ -367,7 +367,7 @@ def _job_functions() -> Dict[str, Callable]:
         "sync_download_states": sync_download_states,
         "sync_hardcover_lists": sync_hardcover_lists,
         "send_availability_emails": send_availability_emails,
-        "reconcile_calibre_library": reconcile_calibre_library,
+        "sync_ebook_availability": sync_ebook_availability,
         "import_calibre_books": import_calibre_books,
         "sync_calibre_metadata": sync_calibre_metadata,
         "refresh_nyt_bestsellers": refresh_nyt_bestsellers,

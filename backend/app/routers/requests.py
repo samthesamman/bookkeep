@@ -865,7 +865,7 @@ async def update_processing_requests_status(db: Session) -> None:
         # If a Calibre library is configured it is the source of truth for
         # ebooks: a request is available as soon as the book is in that library,
         # regardless of how it got there (download, manual add, side-load).
-        # (reconcile_calibre_library covers pending/approved/not_found separately.)
+        # (sync_ebook_availability covers pending/approved/not_found separately.)
         calibre_library_path = get_active_library_path(db)
 
         if not processing_requests:

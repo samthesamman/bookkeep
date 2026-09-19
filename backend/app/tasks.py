@@ -501,7 +501,7 @@ async def check_processing_requests():
     from app.routers.requests import update_processing_requests_status
     db: Session = SessionLocal()
     try:
-        # Belt-and-suspenders: reconcile_calibre_library also does this every
+        # Belt-and-suspenders: sync_ebook_availability also does this every
         # minute, but keep a slower fallback in case that job is disabled.
         promoted: list[int] = []
         try:
@@ -518,7 +518,7 @@ async def check_processing_requests():
         db.close()
 
 
-async def reconcile_calibre_library():
+async def sync_ebook_availability():
     """Daily: treat the Calibre library as the source of truth for ebooks.
 
     1. Promotes completed ebook downloads that Calibre has now indexed (a
@@ -594,7 +594,7 @@ async def reconcile_calibre_library():
                     library_path, [(r.book.title, r.book.author, r.book.isbn) for r in reqs]
                 )
             except calibre_service.CalibreError as exc:
-                logger.warning("reconcile_calibre_library_lookup_failed", error=str(exc))
+                logger.warning("sync_ebook_availability_lookup_failed", error=str(exc))
 
         now = datetime.now(timezone.utc)
         updated = 0
@@ -654,7 +654,7 @@ async def reconcile_calibre_library():
             )
         if updated:
             db.commit()
-            logger.info("reconcile_calibre_library_complete", updated=updated, checked=len(reqs))
+            logger.info("sync_ebook_availability_complete", updated=updated, checked=len(reqs))
 
         await _refresh_downloaded_books(db, promoted)
 
@@ -668,7 +668,7 @@ async def reconcile_calibre_library():
             await clear_cache_pattern("requests_by_hardcover_batch:*")
             await send_availability_emails()
     except Exception as e:
-        logger.error("reconcile_calibre_library_error", error=str(e))
+        logger.error("sync_ebook_availability_error", error=str(e))
         db.rollback()
     finally:
         db.close()
