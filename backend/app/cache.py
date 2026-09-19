@@ -5,6 +5,7 @@ Uses Redis for distributed caching, falls back to in-memory cache if Redis unava
 """
 import os
 from typing import Optional, Any
+from urllib.parse import urlparse
 from aiocache import Cache
 from aiocache.serializers import JsonSerializer
 import structlog
@@ -41,29 +42,30 @@ async def init_cache():
     global cache_instance
     if REDIS_URL:
         try:
-            # Parse Redis URL
+            # Parse Redis URL - urlparse handles auth credentials (redis://:password@host:port/db),
+            # IPv6 hosts, etc. correctly; a naive colon-split breaks as soon as a password is present.
             def _parse_redis_url(url: str) -> dict:
-                if url.startswith("redis://"):
-                    url = url[8:]
-                parts = url.split("/")
-                host_port = parts[0]
-                db = int(parts[1]) if len(parts) > 1 else 0
-                
-                if ":" in host_port:
-                    host, port = host_port.split(":")
-                    port = int(port)
-                else:
-                    host = host_port
-                    port = 6379
-                
-                return {"endpoint": host, "port": port, "db": db}
-            
+                parsed = urlparse(url)
+                db = 0
+                if parsed.path and parsed.path != "/":
+                    try:
+                        db = int(parsed.path.lstrip("/"))
+                    except ValueError:
+                        db = 0
+                return {
+                    "endpoint": parsed.hostname or "localhost",
+                    "port": parsed.port or 6379,
+                    "db": db,
+                    "password": parsed.password,
+                }
+
             redis_config = _parse_redis_url(REDIS_URL)
             cache_instance = Cache(
                 Cache.REDIS,
                 endpoint=redis_config["endpoint"],
                 port=redis_config["port"],
                 db=redis_config["db"],
+                password=redis_config["password"],
                 serializer=JsonSerializer(),
                 namespace="bookkeep",
             )
