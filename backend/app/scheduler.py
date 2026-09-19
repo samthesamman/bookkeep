@@ -68,12 +68,6 @@ JOB_DEFINITIONS = {
         "description": "Fill in missing Hardcover metadata for books not linked to Calibre (mainly audiobooks)",
         "type": "PROCESS",
     },
-    # Booklore
-    "sync_from_booklore": {
-        "default_interval": 24 * 60 * 60,  # 24 hours
-        "description": "Import books from the Booklore library",
-        "type": "PROCESS",
-    },
     # Downloads & availability
     "sync_download_states": {
         "default_interval": 2 * 60,  # 2 minutes
@@ -352,7 +346,6 @@ def _job_functions() -> Dict[str, Callable]:
     from app.tasks import (
         refresh_seed_data,
         sync_book_availability,
-        sync_from_booklore,
         import_audiobookshelf_books,
         sync_audiobook_metadata,
         sync_download_states,
@@ -367,7 +360,6 @@ def _job_functions() -> Dict[str, Callable]:
     return {
         "refresh_seed_data": refresh_seed_data,
         "sync_book_availability": sync_book_availability,
-        "sync_from_booklore": sync_from_booklore,
         "import_audiobookshelf_books": import_audiobookshelf_books,
         "sync_audiobook_metadata": sync_audiobook_metadata,
         "sync_download_states": sync_download_states,

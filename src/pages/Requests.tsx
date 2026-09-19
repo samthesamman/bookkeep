@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Clock, CheckCircle, XCircle, Loader2, Trash2, User, CheckCircle2, Library, Inbox, Link2 } from 'lucide-react';
+import { Clock, CheckCircle, XCircle, Loader2, Trash2, User, CheckCircle2, Inbox, Link2 } from 'lucide-react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -180,37 +180,21 @@ function RequestRow({ request, index }: { request: BookRequest; index: number })
             </Badge>
           </div>
 
-          {/* Requested by / Import source */}
+          {/* Requested by */}
           <div>
-            {request.source === 'booklore_import' ? (
-              <>
-                <p className="text-xs text-muted-foreground/60 mb-2">
-                  Imported {formatRelativeTime(request.createdAt)}
-                </p>
-                <div className="flex items-center gap-2">
-                  <div className="h-8 w-8 rounded-lg bg-emerald-500/15 flex items-center justify-center">
-                    <Library className="h-4 w-4 text-emerald-400" />
-                  </div>
-                  <span className="text-sm text-emerald-400 font-medium">From Booklore</span>
-                </div>
-              </>
-            ) : (
-              <>
-                <p className="text-xs text-muted-foreground/60 mb-2">
-                  Requested {formatRelativeTime(request.createdAt)}
-                </p>
-                <div className="flex items-center gap-2">
-                  <div className="h-8 w-8 rounded-lg bg-primary/15 flex items-center justify-center text-xs font-semibold text-primary">
-                    {getUserInitials(request.userName)}
-                  </div>
-                  <span className="text-sm text-foreground font-medium">{request.userName}</span>
-                </div>
-              </>
-            )}
+            <p className="text-xs text-muted-foreground/60 mb-2">
+              Requested {formatRelativeTime(request.createdAt)}
+            </p>
+            <div className="flex items-center gap-2">
+              <div className="h-8 w-8 rounded-lg bg-primary/15 flex items-center justify-center text-xs font-semibold text-primary">
+                {getUserInitials(request.userName)}
+              </div>
+              <span className="text-sm text-foreground font-medium">{request.userName}</span>
+            </div>
           </div>
 
           {/* Modified date */}
-          {request.updatedAt && request.updatedAt !== request.createdAt && request.source !== 'booklore_import' && (
+          {request.updatedAt && request.updatedAt !== request.createdAt && (
             <p className="text-xs text-muted-foreground/60">
               Modified {formatRelativeTime(request.updatedAt)}
             </p>

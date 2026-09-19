@@ -873,62 +873,6 @@ export const jobsApi = {
     }),
 };
 
-// Booklore API endpoints
-export interface BookloreServer {
-  id: number;
-  name: string;
-  url: string;
-  username: string;
-  is_default: boolean;
-  ebook_library_id: number | null;
-  audiobook_library_id: number | null;
-  created_at: string;
-  updated_at?: string;
-}
-
-export interface BookloreTestResponse {
-  success: boolean;
-  error?: string;
-  libraries?: Array<{ id: number; name: string }>;
-}
-
-export const bookloreApi = {
-  getAll: () =>
-    apiRequest<Array<BookloreServer>>('/api/booklore/'),
-
-  getById: (id: number) =>
-    apiRequest<BookloreServer>(`/api/booklore/${id}`),
-
-  create: (server: { name: string; url: string; username: string; password: string; is_default?: boolean; ebook_library_id?: number | null; audiobook_library_id?: number | null }) =>
-    apiRequest<BookloreServer>('/api/booklore/', {
-      method: 'POST',
-      body: JSON.stringify(server),
-    }),
-
-  update: (id: number, server: { name?: string; url?: string; username?: string; password?: string; is_default?: boolean; ebook_library_id?: number | null; audiobook_library_id?: number | null }) =>
-    apiRequest<BookloreServer>(`/api/booklore/${id}`, {
-      method: 'PUT',
-      body: JSON.stringify(server),
-    }),
-
-  delete: (id: number) =>
-    apiRequest<void>(`/api/booklore/${id}`, {
-      method: 'DELETE',
-    }),
-
-  testConnection: (config: { url: string; username: string; password: string }) =>
-    apiRequest<BookloreTestResponse>('/api/booklore/test', {
-      method: 'POST',
-      body: JSON.stringify(config),
-    }),
-
-  getBooks: (serverId: number) =>
-    apiRequest<Array<any>>(`/api/booklore/${serverId}/books`),
-
-  checkBook: (serverId: number, hardcoverId: number) =>
-    apiRequest<{ available: boolean; book?: any }>(`/api/booklore/${serverId}/check/${hardcoverId}`),
-};
-
 // Audiobookshelf API endpoints
 export interface AudiobookshelfServer {
   id: number;

@@ -29,7 +29,7 @@ export interface BookRequest {
   userName: string;
   format: 'ebook' | 'audiobook';
   status: 'pending' | 'approved' | 'denied' | 'processing' | 'available' | 'not_found';
-  source?: 'user_request' | 'booklore_import';
+  source?: string;
   notes?: string;
   adminNotes?: string;
   readarrReceived?: boolean;

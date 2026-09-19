@@ -3,7 +3,6 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from datetime import datetime, timezone
 import structlog
-import httpx
 from app import database, models, schemas, cache
 from app.auth import require_admin, get_current_user
 
@@ -12,64 +11,11 @@ router = APIRouter()
 
 
 async def check_book_availability(book: models.Book, db: Session) -> dict:
-    """Check if a book exists in Booklore or Audiobookshelf and update availability flags."""
+    """Check if a book exists in Audiobookshelf and update availability flags."""
     # Preserve existing availability — only set True, never reset to False
     ebook_available = bool(book.ebook_available)
     audiobook_available = bool(book.audiobook_available)
     checked_sources = []
-
-    # Check Booklore
-    booklore_server = db.query(models.BookloreServer).filter(
-        models.BookloreServer.is_default == True
-    ).first()
-
-    if booklore_server and book.hardcover_id:
-        try:
-            # Get or refresh token
-            from app.routers.booklore import get_booklore_token
-            token = await get_booklore_token(booklore_server, db)
-
-            if token:
-                async with httpx.AsyncClient(timeout=10.0, verify=False) as client:
-                    headers = {"Authorization": f"Bearer {token}"}
-
-                    # Check by hardcover ID
-                    response = await client.get(
-                        f"{booklore_server.url}/api/v1/books",
-                        headers=headers,
-                        params={"withDescription": "false"}
-                    )
-
-                    if response.status_code == 200:
-                        books_data = response.json()
-                        for bl_book in books_data:
-                            metadata = bl_book.get("metadata", {})
-                            bl_hardcover_id = metadata.get("hardcoverId")
-
-                            # Check if hardcover ID matches (numeric or slug)
-                            if bl_hardcover_id:
-                                if str(bl_hardcover_id) == str(book.hardcover_id) or \
-                                   str(bl_hardcover_id) == str(book.hardcover_slug):
-                                    # Determine format from bookType and library mapping
-                                    book_type = bl_book.get("bookType", "").lower()
-                                    bl_library_id = bl_book.get("libraryId")
-
-                                    if "audio" in book_type:
-                                        audiobook_available = True
-                                    elif bl_library_id and booklore_server.audiobook_library_id and bl_library_id == booklore_server.audiobook_library_id:
-                                        audiobook_available = True
-                                    elif bl_library_id and booklore_server.ebook_library_id and bl_library_id == booklore_server.ebook_library_id:
-                                        ebook_available = True
-                                    else:
-                                        # Default: if no bookType or library mapping, mark as ebook
-                                        ebook_available = True
-
-                                    checked_sources.append(f"booklore:{booklore_server.name}")
-                                    # Don't break — same book may exist in multiple libraries
-        except Exception as e:
-            logger.warning("booklore_availability_check_failed",
-                          book_id=book.id,
-                          error=str(e))
 
     # Check Audiobookshelf
     from app.routers.audiobookshelf import (
@@ -316,7 +262,7 @@ def delete_book(book_id: int, db: Session = Depends(database.get_db), current_us
 
 @router.post("/{book_id}/refresh")
 async def refresh_book_availability(book_id: int, db: Session = Depends(database.get_db), current_user: models.User = Depends(get_current_user)):
-    """Refresh availability status for a single book by checking Booklore and Audiobookshelf."""
+    """Refresh availability status for a single book by checking Audiobookshelf."""
     db_book = db.query(models.Book).filter(models.Book.id == book_id).first()
     if not db_book:
         raise HTTPException(

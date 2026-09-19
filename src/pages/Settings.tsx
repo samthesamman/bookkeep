@@ -42,7 +42,7 @@ import {
 } from '@/components/ui/table';
 import { toast } from 'sonner';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { settingsApi, readarrApi, jobsApi, bookloreApi, audiobookshelfApi, downloadSettingsApi, usersApi, discoverApi, type BookloreServer, type AudiobookshelfServer, type ProwlarrServer, type DownloadClient, type OidcSettingsResponse } from '@/lib/api';
+import { settingsApi, readarrApi, jobsApi, audiobookshelfApi, downloadSettingsApi, usersApi, discoverApi, type AudiobookshelfServer, type ProwlarrServer, type DownloadClient, type OidcSettingsResponse } from '@/lib/api';
 import { usePageVisibility } from '@/hooks/usePageVisibility';
 
 interface ReadarrServer {
@@ -76,16 +76,6 @@ interface Job {
 interface IntervalOption {
   value: number;
   label: string;
-}
-
-interface BookloreServerForm {
-  name: string;
-  url: string;
-  username: string;
-  password: string;
-  is_default: boolean;
-  ebook_library_id: number | null;
-  audiobook_library_id: number | null;
 }
 
 interface AudiobookshelfServerForm {
@@ -807,23 +797,6 @@ export default function Settings() {
   const [editingJob, setEditingJob] = useState<Job | null>(null);
   const [selectedInterval, setSelectedInterval] = useState<number>(0);
   
-  // Booklore state
-  const [showBookloreModal, setShowBookloreModal] = useState(false);
-  const [editingBookloreServer, setEditingBookloreServer] = useState<BookloreServer | null>(null);
-  const [showBooklorePassword, setShowBooklorePassword] = useState(false);
-  const [testingBookloreConnection, setTestingBookloreConnection] = useState(false);
-  const [bookloreTestResult, setBookloreTestResult] = useState<{ success: boolean; libraries?: any[]; error?: string } | null>(null);
-  const [bookloreLibraries, setBookloreLibraries] = useState<Array<{ id: number; name: string }>>([]);
-  const [bookloreForm, setBookloreForm] = useState<BookloreServerForm>({
-    name: '',
-    url: '',
-    username: '',
-    password: '',
-    is_default: false,
-    ebook_library_id: null,
-    audiobook_library_id: null,
-  });
-
   // Audiobookshelf state
   const [showAudiobookshelfModal, setShowAudiobookshelfModal] = useState(false);
   const [editingAudiobookshelfServer, setEditingAudiobookshelfServer] = useState<AudiobookshelfServer | null>(null);
@@ -907,13 +880,6 @@ export default function Settings() {
     },
     refetchInterval: isVisible ? 60000 : false, // Refresh every 60s when visible, pause when hidden
     retry: false,
-  });
-
-  // Fetch Booklore servers
-  const { data: bookloreServers = [], refetch: refetchBookloreServers } = useQuery({
-    queryKey: ['booklore-servers'],
-    queryFn: () => bookloreApi.getAll(),
-    enabled: isAdmin,
   });
 
   // Fetch Audiobookshelf servers
@@ -1226,74 +1192,6 @@ export default function Settings() {
     }
   };
 
-  // Booklore mutations
-  const saveBookloreServerMutation = useMutation({
-    mutationFn: (server: BookloreServerForm) => {
-      if (editingBookloreServer) {
-        return bookloreApi.update(editingBookloreServer.id, server);
-      }
-      return bookloreApi.create(server);
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['booklore-servers'] });
-      toast.success(`Booklore server ${editingBookloreServer ? 'updated' : 'created'}!`);
-      setShowBookloreModal(false);
-      resetBookloreForm();
-    },
-    onError: (error: Error) => {
-      toast.error(`Failed to ${editingBookloreServer ? 'update' : 'create'} server`, {
-        description: error.message,
-      });
-    },
-  });
-
-  const deleteBookloreServerMutation = useMutation({
-    mutationFn: (id: number) => bookloreApi.delete(id),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['booklore-servers'] });
-      toast.success('Booklore server deleted!');
-    },
-    onError: (error: Error) => {
-      toast.error('Failed to delete server', {
-        description: error.message,
-      });
-    },
-  });
-
-  const resetBookloreForm = () => {
-    setBookloreForm({
-      name: '',
-      url: '',
-      username: '',
-      password: '',
-      is_default: false,
-      ebook_library_id: null,
-      audiobook_library_id: null,
-    });
-    setEditingBookloreServer(null);
-    setBookloreTestResult(null);
-    setBookloreLibraries([]);
-  };
-
-  const handleAddBookloreServer = () => {
-    resetBookloreForm();
-    setShowBookloreModal(true);
-  };
-
-  const handleEditBookloreServer = (server: BookloreServer) => {
-    setEditingBookloreServer(server);
-    setBookloreForm({
-      name: server.name,
-      url: server.url,
-      username: server.username,
-      password: '', // Don't populate password for security
-      is_default: server.is_default,
-      ebook_library_id: server.ebook_library_id,
-      audiobook_library_id: server.audiobook_library_id,
-    });
-    setShowBookloreModal(true);
-  };
-
   // Audiobookshelf mutations
   const saveAudiobookshelfServerMutation = useMutation({
     mutationFn: (server: AudiobookshelfServerForm) => {
@@ -1410,58 +1308,6 @@ export default function Settings() {
     }
 
     saveAudiobookshelfServerMutation.mutate(audiobookshelfForm);
-  };
-
-  const handleTestBookloreConnection = async () => {
-    if (!bookloreForm.url || !bookloreForm.username || !bookloreForm.password) {
-      toast.error('Please fill in URL, username, and password');
-      return;
-    }
-
-    setTestingBookloreConnection(true);
-    try {
-      const result = await bookloreApi.testConnection({
-        url: bookloreForm.url,
-        username: bookloreForm.username,
-        password: bookloreForm.password,
-      });
-
-      setBookloreTestResult(result);
-      if (result.success) {
-        if (result.libraries) {
-          setBookloreLibraries(result.libraries);
-        }
-        toast.success('Connection successful!', {
-          description: `Found ${result.libraries?.length || 0} libraries`,
-        });
-      } else {
-        toast.error('Connection failed', {
-          description: result.error,
-        });
-      }
-    } catch (error: any) {
-      toast.error('Connection test failed', {
-        description: error.message,
-      });
-      setBookloreTestResult(null);
-    } finally {
-      setTestingBookloreConnection(false);
-    }
-  };
-
-  const handleSaveBookloreServer = () => {
-    if (!bookloreForm.name || !bookloreForm.url || !bookloreForm.username) {
-      toast.error('Please fill in required fields');
-      return;
-    }
-
-    // For new servers, password is required
-    if (!editingBookloreServer && !bookloreForm.password) {
-      toast.error('Password is required');
-      return;
-    }
-
-    saveBookloreServerMutation.mutate(bookloreForm);
   };
 
   const resetServerForm = () => {
@@ -1772,246 +1618,6 @@ export default function Settings() {
         </TabsContent>
 
         <TabsContent value="services" className="space-y-6 mt-6">
-          {/* Booklore Settings */}
-          <Card className="bg-card border-border">
-            <CardHeader>
-              <CardTitle className="text-foreground">Booklore</CardTitle>
-              <CardDescription>
-                Configure your Booklore server for checking book availability. Booklore is used to determine when books have been downloaded and are ready to read.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {/* Existing Booklore servers */}
-              {bookloreServers.map((server: BookloreServer) => (
-                <div
-                  key={server.id}
-                  className="flex items-center justify-between p-4 border border-border rounded-lg bg-secondary/50"
-                >
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2 mb-1">
-                      <span className="font-medium text-foreground">{server.name}</span>
-                      {server.is_default && (
-                        <Badge variant="secondary" className="text-xs">Default</Badge>
-                      )}
-                    </div>
-                    <p className="text-sm text-muted-foreground">{server.url}</p>
-                    <p className="text-xs text-muted-foreground mt-1">User: {server.username}</p>
-                  </div>
-                  <div className="flex gap-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => handleEditBookloreServer(server)}
-                    >
-                      <Edit className="h-4 w-4 mr-1" />
-                      Edit
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => deleteBookloreServerMutation.mutate(server.id)}
-                      disabled={deleteBookloreServerMutation.isPending}
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
-                  </div>
-                </div>
-              ))}
-
-              {/* Add new Booklore server button */}
-              <button
-                onClick={handleAddBookloreServer}
-                className="w-full p-4 border-2 border-dashed border-border rounded-lg hover:border-primary/50 hover:bg-secondary/50 transition-colors flex items-center justify-center gap-2 text-muted-foreground hover:text-foreground"
-              >
-                <Plus className="h-5 w-5" />
-                Add Booklore Server
-              </button>
-            </CardContent>
-          </Card>
-
-          {/* Booklore Modal */}
-          <Dialog open={showBookloreModal} onOpenChange={setShowBookloreModal}>
-            <DialogContent className="max-w-lg">
-              <DialogHeader>
-                <DialogTitle>
-                  {editingBookloreServer ? 'Edit Booklore Server' : 'Add Booklore Server'}
-                </DialogTitle>
-                <DialogDescription>
-                  Configure your Booklore server connection
-                </DialogDescription>
-              </DialogHeader>
-
-              <div className="space-y-4">
-                <div className="space-y-2">
-                  <Label htmlFor="booklore-name" className="text-foreground">Name *</Label>
-                  <Input
-                    id="booklore-name"
-                    value={bookloreForm.name}
-                    onChange={(e) => setBookloreForm({ ...bookloreForm, name: e.target.value })}
-                    placeholder="e.g., Main Library"
-                    className="bg-secondary border-border"
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="booklore-url" className="text-foreground">URL *</Label>
-                  <Input
-                    id="booklore-url"
-                    value={bookloreForm.url}
-                    onChange={(e) => setBookloreForm({ ...bookloreForm, url: e.target.value })}
-                    placeholder="https://booklore.example.com"
-                    className="bg-secondary border-border"
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="booklore-username" className="text-foreground">Username *</Label>
-                  <Input
-                    id="booklore-username"
-                    value={bookloreForm.username}
-                    onChange={(e) => setBookloreForm({ ...bookloreForm, username: e.target.value })}
-                    placeholder="admin"
-                    className="bg-secondary border-border"
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="booklore-password" className="text-foreground">
-                    Password {editingBookloreServer ? '(leave blank to keep current)' : '*'}
-                  </Label>
-                  <div className="relative">
-                    <Input
-                      id="booklore-password"
-                      type={showBooklorePassword ? "text" : "password"}
-                      value={bookloreForm.password}
-                      onChange={(e) => setBookloreForm({ ...bookloreForm, password: e.target.value })}
-                      className="bg-secondary border-border pr-10"
-                    />
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      className="absolute right-0 top-0 h-full px-3"
-                      onClick={() => setShowBooklorePassword(!showBooklorePassword)}
-                    >
-                      {showBooklorePassword ? (
-                        <EyeOff className="h-4 w-4" />
-                      ) : (
-                        <Eye className="h-4 w-4" />
-                      )}
-                    </Button>
-                  </div>
-                </div>
-
-                <div className="flex items-center space-x-2">
-                  <Checkbox
-                    id="booklore-default"
-                    checked={bookloreForm.is_default}
-                    onCheckedChange={(checked) =>
-                      setBookloreForm({ ...bookloreForm, is_default: checked === true })
-                    }
-                  />
-                  <Label htmlFor="booklore-default" className="font-normal cursor-pointer">
-                    Default Server
-                  </Label>
-                </div>
-
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={handleTestBookloreConnection}
-                  disabled={testingBookloreConnection || !bookloreForm.url || !bookloreForm.username || !bookloreForm.password}
-                  className="w-full"
-                >
-                  <TestTube className="h-4 w-4 mr-2" />
-                  {testingBookloreConnection ? 'Testing...' : 'Test Connection'}
-                </Button>
-
-                {bookloreTestResult && (
-                  <div className={`p-3 rounded-lg ${bookloreTestResult.success ? 'bg-green-500/10 text-green-500' : 'bg-red-500/10 text-red-500'}`}>
-                    <div className="flex items-center gap-2">
-                      {bookloreTestResult.success ? (
-                        <CheckCircle className="h-4 w-4" />
-                      ) : (
-                        <XCircle className="h-4 w-4" />
-                      )}
-                      <span className="text-sm">
-                        {bookloreTestResult.success
-                          ? `Connected! Found ${bookloreTestResult.libraries?.length || 0} libraries`
-                          : bookloreTestResult.error}
-                      </span>
-                    </div>
-                  </div>
-                )}
-
-                {bookloreLibraries.length > 0 && (
-                  <>
-                    <div className="space-y-2">
-                      <Label htmlFor="booklore-ebook-library" className="text-foreground">eBook Library</Label>
-                      <Select
-                        value={bookloreForm.ebook_library_id != null ? String(bookloreForm.ebook_library_id) : "none"}
-                        onValueChange={(value) => setBookloreForm({ ...bookloreForm, ebook_library_id: value === "none" ? null : Number(value) })}
-                      >
-                        <SelectTrigger id="booklore-ebook-library" className="bg-secondary border-border">
-                          <SelectValue placeholder="Select library..." />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="none">None</SelectItem>
-                          {bookloreLibraries.map((lib) => (
-                            <SelectItem key={lib.id} value={String(lib.id)}>
-                              {lib.name}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                      <p className="text-xs text-muted-foreground">Maps this Booklore library to ebook format</p>
-                    </div>
-
-                    <div className="space-y-2">
-                      <Label htmlFor="booklore-audiobook-library" className="text-foreground">Audiobook Library</Label>
-                      <Select
-                        value={bookloreForm.audiobook_library_id != null ? String(bookloreForm.audiobook_library_id) : "none"}
-                        onValueChange={(value) => setBookloreForm({ ...bookloreForm, audiobook_library_id: value === "none" ? null : Number(value) })}
-                      >
-                        <SelectTrigger id="booklore-audiobook-library" className="bg-secondary border-border">
-                          <SelectValue placeholder="Select library..." />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="none">None</SelectItem>
-                          {bookloreLibraries.map((lib) => (
-                            <SelectItem key={lib.id} value={String(lib.id)}>
-                              {lib.name}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                      <p className="text-xs text-muted-foreground">Maps this Booklore library to audiobook format</p>
-                    </div>
-                  </>
-                )}
-
-                <div className="flex justify-end gap-2 pt-4 border-t border-border">
-                  <Button
-                    variant="outline"
-                    onClick={() => {
-                      setShowBookloreModal(false);
-                      resetBookloreForm();
-                    }}
-                  >
-                    Cancel
-                  </Button>
-                  <Button
-                    onClick={handleSaveBookloreServer}
-                    disabled={saveBookloreServerMutation.isPending}
-                  >
-                    <Save className="h-4 w-4 mr-2" />
-                    {saveBookloreServerMutation.isPending ? 'Saving...' : editingBookloreServer ? 'Update' : 'Add Server'}
-                  </Button>
-                </div>
-              </div>
-            </DialogContent>
-          </Dialog>
-
           {/* Audiobookshelf Settings */}
           <Card className="bg-card border-border">
             <CardHeader>

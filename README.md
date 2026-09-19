@@ -297,7 +297,6 @@ Bookkeep runs background jobs via APScheduler. You can view and change schedules
 Default jobs:
 - `refresh_seed_data` (daily): pulls fresh books from Hardcover to keep the local catalog populated.
 - `check_processing_requests` (every 5 minutes): checks for request status changes and updates requests that have completed.
-- `sync_from_booklore` (daily): syncs availability from Booklore, importing items and marking matching requests as available.
 - `sync_missing_metadata` (every 6 hours): fills missing metadata (cover, rating, IDs, series) using Hardcover.
 
 Notes:
@@ -355,7 +354,7 @@ has a hardcover_slug but no numeric hardcover_id
 no cover_url and no hardcover_id (max 50)
 has hardcover_id but no rating (max 50)
 has hardcover_id and a series name/position but no series_id (max 50)
-For each, it looks the book up on Hardcover by slug, then by title/author (tasks.py:1897-1904), skips it if another row already owns that hardcover_id, and otherwise fills hardcover_id, cover, description, page_count, rating, series, genres — fill-only (X or book.X), never overwriting. 0.5 s between calls for rate limiting. This is the job that keeps seed-data / Booklore / Audiobookshelf-imported books from staying half-populated.
+For each, it looks the book up on Hardcover by slug, then by title/author (tasks.py:1897-1904), skips it if another row already owns that hardcover_id, and otherwise fills hardcover_id, cover, description, page_count, rating, series, genres — fill-only (X or book.X), never overwriting. 0.5 s between calls for rate limiting. This is the job that keeps seed-data / Audiobookshelf-imported books from staying half-populated.
 
 reconcile_calibre_library — every 60 s (tasks.py:506)
 The fast loop that treats Calibre as the source of truth for ebook availability. Per run:
@@ -401,7 +400,7 @@ sync_calibre_metadata (daily full sweep) → heal_and_backfill
 reconcile_calibre_library (per-minute) → books_missing_metadata → tasks.py:668
 With use_google=False, Apple's iTunes API is never contacted — only Open Library + Hardcover. And overwrite=False means an existing cover is never replaced. So:
 
-Books created by refresh_seed_data, Booklore sync (tasks.py:1228), or Audiobookshelf sync get cover_url set straight from Hardcover's cached_image at creation, and the gap-fill enrichment never touches it again.
+Books created by refresh_seed_data or Audiobookshelf sync get cover_url set straight from Hardcover's cached_image at creation, and the gap-fill enrichment never touches it again.
 Books first linked by the fuzzy backfill sweep get their gaps filled from Open Library → Hardcover; OL rarely has a usable cover, so it resolves to Hardcover.
 Even on the Apple-enabled paths, a Book row with no ISBN (seed data never sets one) forces Apple into a title/author search that must pass titles_match and have artwork (applebooks_metadata.py:124-130); misses fall through to Hardcover.
 What the UI actually renders

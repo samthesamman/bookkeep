@@ -68,8 +68,6 @@ class Book(Base):
     page_count = Column(Integer, nullable=True)
     hardcover_id = Column(Integer, nullable=True, index=True, unique=True)
     hardcover_slug = Column(String, nullable=True, index=True)
-    booklore_id = Column(Integer, nullable=True, index=True, unique=True)
-    booklore_added_on = Column(DateTime(timezone=True), nullable=True)
     audiobookshelf_id = Column(String, nullable=True, index=True, unique=True)
     default_edition_id = Column(Integer, nullable=True)
     default_physical_edition_id = Column(Integer, nullable=True)
@@ -131,7 +129,7 @@ class BookRequest(Base):
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     format = Column(String, nullable=False)  # 'ebook', 'audiobook'
     status = Column(String, default='pending')  # 'pending', 'approved', 'denied', 'processing', 'available'
-    source = Column(String, default='user_request')  # 'user_request' or 'booklore_import'
+    source = Column(String, default='user_request')  # 'user_request' or an import source
     notes = Column(Text, nullable=True)
     admin_notes = Column(Text, nullable=True)
     # Deprecated: Readarr fields kept for backward compatibility / migration
@@ -186,26 +184,6 @@ class ReadarrServer(Base):
     audiobook_quality_profile_id = Column(Integer, nullable=True)
     audiobook_root_folder = Column(String, nullable=True)
     audiobook_tags = Column(String, nullable=True)  # Comma-separated tag IDs
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
-
-
-class BookloreServer(Base):
-    __tablename__ = "booklore_servers"
-
-    id = Column(Integer, primary_key=True, index=True)
-    name = Column(String, nullable=False)
-    url = Column(String, nullable=False)  # Full URL like https://booklore.example.com
-    username = Column(String, nullable=False)
-    password = Column(String, nullable=False)  # Stored encrypted/hashed
-    is_default = Column(Boolean, default=False)
-    # Library-to-format mapping (Booklore library IDs)
-    ebook_library_id = Column(Integer, nullable=True)
-    audiobook_library_id = Column(Integer, nullable=True)
-    # Cached JWT tokens
-    access_token = Column(Text, nullable=True)
-    refresh_token = Column(Text, nullable=True)
-    token_expires_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 

@@ -138,7 +138,7 @@ class BookRequestResponse(BaseModel):
     user_id: int
     format: str
     status: str
-    source: Optional[str] = "user_request"  # 'user_request' or 'booklore_import'
+    source: Optional[str] = "user_request"  # 'user_request' or an import source
     notes: Optional[str] = None
     admin_notes: Optional[str] = None
     # Deprecated: Readarr fields kept for backward compatibility
@@ -492,45 +492,6 @@ class ReadarrAvailabilityBatchResponse(BaseModel):
     results: List[ReadarrAvailabilityItem]
 
 
-# Booklore Server schemas
-class BookloreServerBase(BaseModel):
-    name: str
-    url: str  # Full URL like https://booklore.example.com
-    username: str
-    is_default: bool = False
-    ebook_library_id: Optional[int] = None
-    audiobook_library_id: Optional[int] = None
-
-class BookloreServerCreate(BookloreServerBase):
-    password: str
-
-class BookloreServerUpdate(BaseModel):
-    name: Optional[str] = None
-    url: Optional[str] = None
-    username: Optional[str] = None
-    password: Optional[str] = None
-    is_default: Optional[bool] = None
-    ebook_library_id: Optional[int] = None
-    audiobook_library_id: Optional[int] = None
-
-class BookloreServerResponse(BookloreServerBase):
-    id: int
-    created_at: datetime
-    updated_at: Optional[datetime] = None
-
-    class Config:
-        from_attributes = True
-
-class BookloreTestConnectionRequest(BaseModel):
-    url: str
-    username: str
-    password: str
-
-class BookloreTestConnectionResponse(BaseModel):
-    success: bool
-    error: Optional[str] = None
-    libraries: Optional[List[dict]] = None  # List of Booklore libraries
-
 # Audiobookshelf Server schemas
 class AudiobookshelfServerBase(BaseModel):
     name: str
@@ -599,16 +560,3 @@ class AudiobookshelfTestConnectionResponse(BaseModel):
     success: bool
     error: Optional[str] = None
     libraries: Optional[List[dict]] = None  # List of Audiobookshelf libraries
-
-
-class BookloreBook(BaseModel):
-    """Book from Booklore API"""
-    id: int
-    title: Optional[str] = None
-    libraryId: Optional[int] = None
-    libraryName: Optional[str] = None
-    filePath: Optional[str] = None
-    hardcover_id: Optional[str] = None  # From metadata.hardcoverId
-    
-    class Config:
-        extra = "allow"

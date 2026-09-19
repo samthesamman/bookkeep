@@ -63,12 +63,6 @@ DEFAULT_JOBS = {
         "type": "PROCESS",
         "description": "Fill in missing Hardcover metadata for books not linked to Calibre (mainly audiobooks)",
     },
-    # Booklore
-    "sync_from_booklore": {
-        "interval_seconds": 24 * 60 * 60,
-        "type": "PROCESS",
-        "description": "Import books from the Booklore library",
-    },
     # Downloads & availability
     "sync_download_states": {
         "interval_seconds": 2 * 60,
