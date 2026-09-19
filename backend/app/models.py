@@ -457,6 +457,8 @@ class CalibreBookLink(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
+    book = relationship("Book", back_populates="calibre_link")
+
 
 class CalibreImportAttempt(Base):
     """A Calibre book id that ``import_calibre_books`` tried to enrich and found
@@ -475,5 +477,3 @@ class CalibreImportAttempt(Base):
     calibre_book_id = Column(Integer, nullable=False, unique=True, index=True)
     last_attempted_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
     attempt_count = Column(Integer, nullable=False, default=1)
-
-    book = relationship("Book", back_populates="calibre_link")
