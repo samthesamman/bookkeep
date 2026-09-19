@@ -779,6 +779,14 @@ async def _enrich_calibre_metadata(db: Session, *, limit: int) -> int:
     return enriched
 
 
+# A Calibre book we searched Hardcover + Open Library for and found nothing
+# isn't re-attempted for this long - without this, an unmatchable book (e.g. a
+# title neither catalog has) gets both APIs searched again on every single
+# run of import_calibre_books forever, since a failed match is never linked
+# and so never leaves the "todo" set on its own.
+CALIBRE_IMPORT_RETRY_COOLDOWN = timedelta(days=7)
+
+
 async def _import_unlinked_calibre_books(
     db: Session, library_path: str, *, limit: int
 ) -> int:
@@ -796,12 +804,14 @@ async def _import_unlinked_calibre_books(
     * Otherwise it's genuinely new to us: create a bare row from the Calibre
       identity, enrich it (Open Library, then Hardcover) since a bare
       title/author copied from Calibre isn't useful on its own, and link it -
-      only keeping the row if something was actually found.
+      only keeping the row if something was actually found. A book with
+      nothing found is recorded in ``CalibreImportAttempt`` and skipped for
+      ``CALIBRE_IMPORT_RETRY_COOLDOWN`` instead of being retried every run.
 
     Bounded per run.
     """
     from app.services import book_metadata, calibre_service, calibre_link_service
-    from app.models import Book, CalibreBookLink
+    from app.models import Book, CalibreBookLink, CalibreImportAttempt
 
     try:
         library_ids = await calibre_service.call_with_timeout(
@@ -812,7 +822,14 @@ async def _import_unlinked_calibre_books(
         return 0
 
     linked = {r[0] for r in db.query(CalibreBookLink.calibre_book_id).all()}
-    todo = sorted(library_ids - linked)[:limit]
+    cooldown_cutoff = datetime.now(timezone.utc) - CALIBRE_IMPORT_RETRY_COOLDOWN
+    on_cooldown = {
+        r[0]
+        for r in db.query(CalibreImportAttempt.calibre_book_id)
+        .filter(CalibreImportAttempt.last_attempted_at >= cooldown_cutoff)
+        .all()
+    }
+    todo = sorted(library_ids - linked - on_cooldown)[:limit]
     if not todo:
         return 0
 
@@ -896,8 +913,24 @@ async def _import_unlinked_calibre_books(
 
             if not found and not book.hardcover_id:
                 # Nothing to show for this book — leave it "Calibre only" rather than
-                # keeping a bare linked row that looks enriched but is not.
+                # keeping a bare linked row that looks enriched but is not. Record
+                # the attempt so it's not re-searched on every future run.
                 db.rollback()
+                attempt = db.query(CalibreImportAttempt).filter(
+                    CalibreImportAttempt.calibre_book_id == cal_id
+                ).first()
+                if attempt is None:
+                    attempt = CalibreImportAttempt(calibre_book_id=cal_id, attempt_count=0)
+                    db.add(attempt)
+                attempt.last_attempted_at = datetime.now(timezone.utc)
+                attempt.attempt_count += 1
+                try:
+                    db.commit()
+                except Exception as exc:
+                    db.rollback()
+                    logger.warning(
+                        "calibre_import_attempt_record_failed", calibre_id=cal_id, error=str(exc)
+                    )
                 await asyncio.sleep(0.5)
                 continue
 

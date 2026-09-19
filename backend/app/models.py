@@ -453,4 +453,23 @@ class CalibreBookLink(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
+
+class CalibreImportAttempt(Base):
+    """A Calibre book id that ``import_calibre_books`` tried to enrich and found
+    nothing for (no Hardcover or Open Library match) - so it stays unlinked.
+
+    Deliberately separate from ``CalibreBookLink`` (whose ``book_id`` is NOT
+    NULL): there is no ``Book`` row for one of these, by design - the point of
+    ``_import_unlinked_calibre_books`` rolling back on a failed match is to not
+    leave a bare, metadata-less row visible in the library. This table is just
+    a cooldown marker so the same unmatchable book isn't re-searched against
+    both APIs on every run - see CALIBRE_IMPORT_RETRY_COOLDOWN in tasks.py.
+    """
+    __tablename__ = "calibre_import_attempts"
+
+    id = Column(Integer, primary_key=True, index=True)
+    calibre_book_id = Column(Integer, nullable=False, unique=True, index=True)
+    last_attempted_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    attempt_count = Column(Integer, nullable=False, default=1)
+
     book = relationship("Book", back_populates="calibre_link")
