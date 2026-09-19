@@ -16,36 +16,13 @@ logger = structlog.get_logger(__name__)
 # Global scheduler instance
 scheduler: Optional[AsyncIOScheduler] = None
 
-# Job definitions with their default intervals (in seconds)
+# Job definitions with their default intervals (in seconds), grouped by the
+# system each job talks to.
 JOB_DEFINITIONS = {
+    # Hardcover
     "refresh_seed_data": {
         "default_interval": 24 * 60 * 60,  # 24 hours
-        "description": "Fetch new books from Hardcover API",
-        "type": "PROCESS",
-    },
-    "sync_book_availability": {
-        "default_interval": 5 * 60,  # 5 minutes
-        "description": "Match processing requests against download/Calibre state and mark them available",
-        "type": "PROCESS",
-    },
-    "sync_from_booklore": {
-        "default_interval": 24 * 60 * 60,  # 24 hours
-        "description": "Import books from Booklore library",
-        "type": "PROCESS",
-    },
-    "import_audiobookshelf_books": {
-        "default_interval": 24 * 60 * 60,  # 24 hours
-        "description": "Import audiobooks from Audiobookshelf library",
-        "type": "PROCESS",
-    },
-    "sync_audiobook_metadata": {
-        "default_interval": 6 * 60 * 60,  # 6 hours
-        "description": "Fetch missing Hardcover metadata for non-Calibre-linked books (mainly audiobooks)",
-        "type": "PROCESS",
-    },
-    "sync_download_states": {
-        "default_interval": 2 * 60,  # 2 minutes
-        "description": "Sync download states from download clients",
+        "description": "Fetch new books from the Hardcover API",
         "type": "PROCESS",
     },
     "sync_hardcover_lists": {
@@ -53,24 +30,20 @@ JOB_DEFINITIONS = {
         "description": "Sync Hardcover to-read/list books and auto-request them",
         "type": "PROCESS",
     },
+    "sync_audiobook_metadata": {
+        "default_interval": 6 * 60 * 60,  # 6 hours
+        "description": "Fill in missing Hardcover metadata for books not linked to Calibre (mainly audiobooks)",
+        "type": "PROCESS",
+    },
     "refresh_nyt_bestsellers": {
         "default_interval": 24 * 60 * 60,  # 24 hours
         "description": "Refresh NYT Best Sellers lists shown on the Discover page",
         "type": "PROCESS",
     },
-    "send_availability_emails": {
-        "default_interval": 5 * 60,  # 5 minutes
-        "description": "Email available books to users who opted in when requesting",
-        "type": "PROCESS",
-    },
-    "heal_calibre_links": {
-        "default_interval": 24 * 60 * 60,  # 24 hours
-        "description": "Repair stale Calibre links and reopen requests whose link no longer resolves",
-        "type": "PROCESS",
-    },
+    # Calibre
     "import_calibre_books": {
         "default_interval": 24 * 60 * 60,  # 24 hours
-        "description": "Heal Calibre links and import side-loaded books not yet in Bookworms",
+        "description": "Link and import Calibre library books Bookkeep doesn't know about yet",
         "type": "PROCESS",
         "run_on_startup": True,
         "startup_delay_seconds": 30,
@@ -83,6 +56,39 @@ JOB_DEFINITIONS = {
         # A little after import_calibre_books, so books it links today are
         # usually enriched the same day instead of waiting for tomorrow's run.
         "startup_delay_seconds": 90,
+    },
+    "heal_calibre_links": {
+        "default_interval": 24 * 60 * 60,  # 24 hours
+        "description": "Repair stale Calibre links and reopen requests whose link no longer resolves",
+        "type": "PROCESS",
+    },
+    # Audiobookshelf
+    "import_audiobookshelf_books": {
+        "default_interval": 24 * 60 * 60,  # 24 hours
+        "description": "Import audiobooks from the Audiobookshelf library",
+        "type": "PROCESS",
+    },
+    # Booklore
+    "sync_from_booklore": {
+        "default_interval": 24 * 60 * 60,  # 24 hours
+        "description": "Import books from the Booklore library",
+        "type": "PROCESS",
+    },
+    # Downloads & availability
+    "sync_download_states": {
+        "default_interval": 2 * 60,  # 2 minutes
+        "description": "Sync download states from download clients",
+        "type": "PROCESS",
+    },
+    "sync_book_availability": {
+        "default_interval": 5 * 60,  # 5 minutes
+        "description": "Mark ebook/audiobook requests available once downloaded or found in Calibre",
+        "type": "PROCESS",
+    },
+    "send_availability_emails": {
+        "default_interval": 5 * 60,  # 5 minutes
+        "description": "Email available books to users who opted in when requesting",
+        "type": "PROCESS",
     },
 }
 

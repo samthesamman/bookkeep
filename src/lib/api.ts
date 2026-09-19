@@ -818,6 +818,7 @@ export const readarrApi = {
 export interface Job {
   name: string;
   type: string;
+  description: string | null;
   interval_seconds: number;
   last_execution: string | null;
   next_execution: string | null;

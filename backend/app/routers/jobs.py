@@ -18,18 +18,73 @@ router = APIRouter()
 _running_jobs: Dict[str, Dict[str, Any]] = {}
 
 
-# Default job configurations
+# Default job configurations, grouped by the system each job talks to.
 DEFAULT_JOBS = {
-    "refresh_seed_data": {"interval_seconds": 24 * 60 * 60, "type": "PROCESS"},
-    "sync_book_availability": {"interval_seconds": 5 * 60, "type": "PROCESS"},
-    "sync_from_booklore": {"interval_seconds": 24 * 60 * 60, "type": "PROCESS"},
-    "import_audiobookshelf_books": {"interval_seconds": 24 * 60 * 60, "type": "PROCESS"},
-    "sync_audiobook_metadata": {"interval_seconds": 6 * 60 * 60, "type": "PROCESS"},
-    "sync_hardcover_lists": {"interval_seconds": 6 * 60 * 60, "type": "PROCESS"},
-    "send_availability_emails": {"interval_seconds": 5 * 60, "type": "PROCESS"},
-    "heal_calibre_links": {"interval_seconds": 24 * 60 * 60, "type": "PROCESS"},
-    "import_calibre_books": {"interval_seconds": 24 * 60 * 60, "type": "PROCESS"},
-    "sync_calibre_metadata": {"interval_seconds": 24 * 60 * 60, "type": "PROCESS"},
+    # Hardcover
+    "refresh_seed_data": {
+        "interval_seconds": 24 * 60 * 60,
+        "type": "PROCESS",
+        "description": "Fetch new books from the Hardcover API",
+    },
+    "sync_hardcover_lists": {
+        "interval_seconds": 6 * 60 * 60,
+        "type": "PROCESS",
+        "description": "Sync Hardcover to-read/list books and auto-request them",
+    },
+    "sync_audiobook_metadata": {
+        "interval_seconds": 6 * 60 * 60,
+        "type": "PROCESS",
+        "description": "Fill in missing Hardcover metadata for books not linked to Calibre (mainly audiobooks)",
+    },
+    "refresh_nyt_bestsellers": {
+        "interval_seconds": 24 * 60 * 60,
+        "type": "PROCESS",
+        "description": "Refresh NYT Best Sellers lists shown on the Discover page",
+    },
+    # Calibre
+    "import_calibre_books": {
+        "interval_seconds": 24 * 60 * 60,
+        "type": "PROCESS",
+        "description": "Link and import Calibre library books Bookkeep doesn't know about yet",
+    },
+    "sync_calibre_metadata": {
+        "interval_seconds": 24 * 60 * 60,
+        "type": "PROCESS",
+        "description": "Batch-fetch missing metadata for Calibre library books",
+    },
+    "heal_calibre_links": {
+        "interval_seconds": 24 * 60 * 60,
+        "type": "PROCESS",
+        "description": "Repair stale Calibre links and reopen requests whose link no longer resolves",
+    },
+    # Audiobookshelf
+    "import_audiobookshelf_books": {
+        "interval_seconds": 24 * 60 * 60,
+        "type": "PROCESS",
+        "description": "Import audiobooks from the Audiobookshelf library",
+    },
+    # Booklore
+    "sync_from_booklore": {
+        "interval_seconds": 24 * 60 * 60,
+        "type": "PROCESS",
+        "description": "Import books from the Booklore library",
+    },
+    # Downloads & availability
+    "sync_download_states": {
+        "interval_seconds": 2 * 60,
+        "type": "PROCESS",
+        "description": "Sync download states from download clients",
+    },
+    "sync_book_availability": {
+        "interval_seconds": 5 * 60,
+        "type": "PROCESS",
+        "description": "Mark ebook/audiobook requests available once downloaded or found in Calibre",
+    },
+    "send_availability_emails": {
+        "interval_seconds": 5 * 60,
+        "type": "PROCESS",
+        "description": "Email available books to users who opted in when requesting",
+    },
 }
 
 # Available interval options (in seconds) for the dropdown
@@ -56,6 +111,7 @@ class JobUpdateRequest(BaseModel):
 class JobResponse(BaseModel):
     name: str
     type: str
+    description: Optional[str] = None
     interval_seconds: int
     last_execution: Optional[str] = None
     next_execution: Optional[str] = None
@@ -139,6 +195,7 @@ def get_job_info(job_name: str, db: Session) -> Dict[str, Any]:
     return {
         "name": job_name,
         "type": DEFAULT_JOBS.get(job_name, {}).get("type", "PROCESS"),
+        "description": DEFAULT_JOBS.get(job_name, {}).get("description"),
         "interval_seconds": interval_seconds,
         "last_execution": (last_execution.isoformat() + "Z") if last_execution else None,
         "next_execution": (next_execution.isoformat() + "Z") if next_execution else None,

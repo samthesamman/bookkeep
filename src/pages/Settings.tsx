@@ -66,6 +66,7 @@ interface ReadarrServer {
 interface Job {
   name: string;
   type: string;
+  description: string | null;
   interval_seconds: number;
   last_execution: string | null;
   next_execution: string | null;
@@ -2286,7 +2287,12 @@ export default function Settings() {
                     return (
                       <TableRow key={job.name}>
                         <TableCell className="font-medium text-foreground">
-                          {formatJobName(job.name)}
+                          <div>{formatJobName(job.name)}</div>
+                          {job.description && (
+                            <div className="text-xs font-normal text-muted-foreground mt-0.5">
+                              {job.description}
+                            </div>
+                          )}
                         </TableCell>
                         <TableCell>
                           <Badge variant="outline" className="border-border text-foreground">
